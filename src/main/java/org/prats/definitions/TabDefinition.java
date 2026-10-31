@@ -4,7 +4,7 @@ import java.util.List;
 
 public class TabDefinition {
     private String label;
-    private List<FieldDefinition> fields;
+    private List<TabFieldDefinition> fields;
 
     public String getLabel() {
         return label;
@@ -14,11 +14,11 @@ public class TabDefinition {
         this.label = label;
     }
 
-    public List<FieldDefinition> getFields() {
+    public List<TabFieldDefinition> getFields() {
         return fields;
     }
 
-    public void setFields(List<FieldDefinition> fields) {
+    public void setFields(List<TabFieldDefinition> fields) {
         this.fields = fields;
     }
 }

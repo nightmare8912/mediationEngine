@@ -4,8 +4,9 @@ import java.util.List;
 
 public class TableDefinition {
     private String label;
+    private String id;
     private int numberOfFields;
-    List<FieldDefinition> fields;
+    List<TableFieldDefinition> fields;
 
     public int getNumberOfFields() {
         return numberOfFields;
@@ -23,11 +24,19 @@ public class TableDefinition {
         this.label = label;
     }
 
-    public List<FieldDefinition> getFields() {
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public List<TableFieldDefinition> getFields() {
         return fields;
     }
 
-    public void setFields(List<FieldDefinition> fields) {
+    public void setFields(List<TableFieldDefinition> fields) {
         this.fields = fields;
     }
 }

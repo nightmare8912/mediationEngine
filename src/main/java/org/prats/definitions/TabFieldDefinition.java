@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public class FieldDefinition {
+public class TabFieldDefinition {
 
     private String id;
     private String label;
