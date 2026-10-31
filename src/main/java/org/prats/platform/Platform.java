@@ -1,4 +1,4 @@
-package org.prats.platform.internalH2Database;
+package org.prats.platform;
 
 public class Platform {
 }

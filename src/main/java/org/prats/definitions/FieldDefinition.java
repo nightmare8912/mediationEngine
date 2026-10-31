@@ -1,14 +1,14 @@
+package org.prats.definitions;
+
 public class FieldDefinition {
 
     private String id;
-    private String name;
+    private String label;
     private String type;
     private boolean required;
     private boolean enabled;
 
-    public void getId() {
-        return id;
-    }
+    public String getId() { return id; }
 
     public void setId(String id) {
         this.id = id;
@@ -22,12 +22,12 @@ public class FieldDefinition {
         this.enabled = enabled;
     }
 
-    public String getName() {
-        return name;
+    public String getLabel() {
+        return label;
     }
 
-    public void setName(String name) {
-        this.name = name;
+    public void setLabel(String label) {
+        this.label = label;
     }
 
     public String getType() {

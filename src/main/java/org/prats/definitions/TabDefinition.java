@@ -1,13 +1,17 @@
+package org.prats.definitions;
+
+import java.util.List;
+
 public class TabDefinition {
-    private String name;
+    private String label;
     private List<FieldDefinition> fields;
 
-    public String getName() {
-        return name;
+    public String getLabel() {
+        return label;
     }
 
-    public void setName(String name) {
-        this.name = name;
+    public void setLabel(String label) {
+        this.label = label;
     }
 
     public List<FieldDefinition> getFields() {
