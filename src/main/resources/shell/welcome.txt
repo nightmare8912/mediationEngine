@@ -1,0 +1,14 @@
+==================================================
+          MEDIATION ENGINE - COMMAND SHELL
+==================================================
+
+Welcome to Mediation Engine!
+
+Version 1.0
+
+Your environment is ready.
+
+Type 'meng help' to see available commands.
+Type 'meng exit' to close the shell.
+
+==================================================

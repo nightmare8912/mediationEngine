@@ -1,0 +1,24 @@
+2026-11-01 00:22:14.524376+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS Batch [*]Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, )"; SQL statement:
+CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ) [42000-252]
+2026-11-01 00:22:18.368160+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS Batch [*]Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, )"; SQL statement:
+CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ) [42000-252]
+2026-11-01 00:23:47.517756+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS Batch [*]Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, )"; SQL statement:
+CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ) [42000-252]
+2026-11-01 00:23:50.155619+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS Batch [*]Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, )"; SQL statement:
+CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ) [42000-252]
+2026-11-01 00:26:29.189347+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, [*]', PRIMARY KEY (agent_id))"; SQL statement:
+CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ', PRIMARY KEY (agent_id)) [42000-252]
+2026-11-01 00:26:31.902228+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, [*]', PRIMARY KEY (agent_id))"; SQL statement:
+CREATE TABLE IF NOT EXISTS Batch Agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ', PRIMARY KEY (agent_id)) [42000-252]
+2026-11-01 00:46:41.166051+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS batch_agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, [*]', PRIMARY KEY (agent_id))"; SQL statement:
+CREATE TABLE IF NOT EXISTS batch_agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ', PRIMARY KEY (agent_id)) [42000-252]
+2026-11-01 00:46:43.534199+05:30 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "CREATE TABLE IF NOT EXISTS batch_agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, [*]', PRIMARY KEY (agent_id))"; SQL statement:
+CREATE TABLE IF NOT EXISTS batch_agents (agent_id VARCHAR(15) NOT NULL, agent_label VARCHAR(20) NOT NULL, agent_type VARCHAR(15) NOT NULL, ', PRIMARY KEY (agent_id)) [42000-252]

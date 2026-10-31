@@ -1,0 +1,16 @@
+Welcome to the help menu.
+
+Here is a list of commands that you can use, with its purpose:
+
+    1. meng create tables
+       Creates all the tables that are essential for the application to work
+
+    2. meng drop tables
+        Drops all the existing config tables. Once this is done, all the users will get
+        deleted, and no any open application instance would crash.
+
+    3. meng create user -u <username> -p <password>
+        Creates a new user in the system, after which they can login.
+
+    4. meng drop user -u <username>
+        Drops the user from database, and they cannot login now

@@ -11,10 +11,13 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 public class TableInitializer {
     private String databaseConfigFile;
+
+    public TableInitializer() {}
 
     public TableInitializer(String databaseConfigFile) {
         this.databaseConfigFile = databaseConfigFile;
@@ -121,17 +124,34 @@ public class TableInitializer {
         ConfigParser configParser = new ConfigParser();
         DatabaseDefinition databaseDefinition = configParser.initializeDatabaseConfig(databaseConfigFile);
 
+        databaseDefinition.getTables().sort(
+                new Comparator<DatabaseFieldDefinition>() {
+                    @Override
+                    public int compare(DatabaseFieldDefinition o1, DatabaseFieldDefinition o2) {
+                        return Integer.compare(
+                                o1.getCreationSequence(),
+                                o2.getCreationSequence()
+                        );
+                    }
+                }
+        );
+
         for (DatabaseFieldDefinition table: databaseDefinition.getTables()) {
-            try (Connection connection = DatabaseInitializer.getConnection())
+            try (Connection connection = DatabaseInitializer.getConnection(
+                    databaseDefinition.getUrl(), databaseDefinition.getUser(), databaseDefinition.getPass()
+                    ))
             {
+                System.out.println("Creating table: " + table.getTableId());
                 errorMessage = createTable(connection, configParser.initializeTableConfig(table.getPath()));
 
                 if (!errorMessage.isEmpty())
                 {
                     System.out.println("Error with table " + table.getTableLabel() + errorMessage);
                     if (table.isCritical())
-                        throw new RuntimeException("Critical error while initalizing " + table.getTableLabel());
+                        throw new RuntimeException("Critical error while initializing " + table.getTableLabel());
                 }
+                else
+                    System.out.println("Created table: " + table.getTableId());
             } catch (SQLException sqle)
             {
                 System.out.println("Error with table " + table.getTableLabel() + sqle.getStackTrace());

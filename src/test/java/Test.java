@@ -1,4 +1,5 @@
 import org.prats.configParser.ConfigParser;
+import org.prats.configParser.DatabaseConfigParser;
 import org.prats.definitions.DatabaseDefinition;
 import org.prats.definitions.DatabaseFieldDefinition;
 import org.prats.definitions.TableDefinition;
@@ -16,7 +17,12 @@ public class Test {
 //        TableInitializer tableInitializer = new TableInitializer("/Users/pratyush./Desktop/coding/mediationEngine2/src/main/resources/configs/databaseConfigs/table_database.conf");
 //        tableInitializer.initializeDatabase();
 
-        try (Connection connection = DatabaseInitializer.getConnection()) {
+        DatabaseDefinition databaseDefinition = new DatabaseConfigParser().initializeDatabaseConfig("/Users/pratyush./Desktop/coding/mediationEngine2/src/main/resources/configs/databaseConfigs/table_database.conf");
+        try (Connection connection = DatabaseInitializer.getConnection(
+                databaseDefinition.getUrl(),
+                databaseDefinition.getUser(),
+                databaseDefinition.getPass()
+        )) {
             Statement statement = connection.createStatement();
             ResultSet resultSet = statement.executeQuery(
                     "SELECT * FROM batch_agents"
