@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public class DatabaseFieldDefinition {
+public class DatabaseTableDefinition {
     private String tableLabel;
     private String tableId;
     private int creationSequence;

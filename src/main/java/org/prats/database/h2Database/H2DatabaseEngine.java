@@ -18,6 +18,9 @@ public class H2DatabaseEngine {
             long idleTimeout,
             int maxPoolSize
     ) {
+        // null check of datasource to avoid re-creation
+        if (dataSource != null) return;
+
         // initializing data source
         dataSource = HikariDataBaseUtilities.initializeHikariSource(
                 url,
@@ -27,7 +30,12 @@ public class H2DatabaseEngine {
                 idleTimeout,
                 maxPoolSize
         );
+
         System.out.println("Initialized HikariH2: " + dataSource.getDataSourceProperties());
+    }
+
+    public static HikariDataSource getDataSource() {
+        return dataSource;
     }
 
     public static Connection getConnection() throws SQLException {

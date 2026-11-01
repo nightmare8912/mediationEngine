@@ -1,18 +1,26 @@
 package org.prats.shell;
 
-import org.prats.configParser.FilePathParser;
+import org.prats.internalFileHanldingUtilities.configParser.FilePathParser;
 import org.prats.database.h2Database.H2DatabaseEngine;
 import org.prats.definitions.FilePathDefinition;
 import org.prats.database.h2Database.TableInitializer;
 import org.prats.internalFileHanldingUtilities.FileHandler;
+import org.prats.platform.PlatformInitializer;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Scanner;
 
 public class CommandLineInterface {
 
     private FileHandler fileHandler;
+    private PlatformInitializer platformInitializer;
 
-    public CommandLineInterface() { fileHandler = new FileHandler(); }
+    public CommandLineInterface() {
+        fileHandler = new FileHandler();
+        platformInitializer = new PlatformInitializer();
+    }
 
     public void displayWelcomeMessage(FilePathDefinition filePathDefinition) {
         System.out.println(fileHandler.openAndRead(filePathDefinition.getWelcome()));
@@ -33,6 +41,19 @@ public class CommandLineInterface {
     public void createTablesFromConfig(FilePathDefinition filePathDefinition) {
         System.out.println("Creating tables...");
         new TableInitializer().initializeDatabase(filePathDefinition.getDatabaseConf());
+    }
+
+    public void startPlatform(FilePathDefinition filePathDefinition) {
+        System.out.println("Starting platform...");
+        try
+        {
+            platformInitializer.initializePlatform(new ArrayList<>(), filePathDefinition.getDatabaseConf());
+            System.out.println("Started platform.");
+        }
+        catch (IOException ioe)
+        {
+            System.out.println("Unable to start platform..." + Arrays.toString(ioe.getStackTrace()));
+        }
     }
 
     public void shutdownH2Database() {
@@ -61,6 +82,9 @@ public class CommandLineInterface {
                                                     break;
 
                 case "meng shutdown h2db":          shutdownH2Database();
+                                                    break;
+
+                case "meng start platform":         startPlatform(filePathDefinition);
                                                     break;
 
                 default:                            displayCommandNotFoundMessage(command);

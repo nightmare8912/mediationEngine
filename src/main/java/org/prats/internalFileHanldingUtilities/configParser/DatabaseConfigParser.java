@@ -1,9 +1,9 @@
-package org.prats.configParser;
+package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import org.prats.definitions.DatabaseDefinition;
-import org.prats.definitions.DatabaseFieldDefinition;
+import org.prats.definitions.DatabaseTableDefinition;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -21,7 +21,7 @@ public class DatabaseConfigParser {
     public DatabaseDefinition initializeDatabaseConfig() {
         // declare the variables
         DatabaseDefinition            databaseDefinition  = new DatabaseDefinition();
-        List<DatabaseFieldDefinition> fieldDefinitionList = new ArrayList<>();
+        List<DatabaseTableDefinition> fieldDefinitionList = new ArrayList<>();
 
         // open, read and parse the config file
         Config config = ConfigFactory.parseFile(new File(configFilePath));
@@ -39,7 +39,7 @@ public class DatabaseConfigParser {
 
         for (Config table: tables)
         {
-            DatabaseFieldDefinition fieldDefinition = new DatabaseFieldDefinition();
+            DatabaseTableDefinition fieldDefinition = new DatabaseTableDefinition();
             fieldDefinition.setTableLabel(table.getString("label"));
             fieldDefinition.setTableId(table.getString("id"));
             fieldDefinition.setCreationSequence(table.getInt("creation_sequence"));

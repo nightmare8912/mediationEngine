@@ -11,7 +11,7 @@ public class DatabaseDefinition {
     private long timeout;
     private long idleTimeout;
     private int maxConnections;
-    private List<DatabaseFieldDefinition> tables;
+    private List<DatabaseTableDefinition> tables;
 
     public String getLabel() {
         return label;
@@ -77,11 +77,11 @@ public class DatabaseDefinition {
         this.maxConnections = maxConnections;
     }
 
-    public List<DatabaseFieldDefinition> getTables() {
+    public List<DatabaseTableDefinition> getTables() {
         return tables;
     }
 
-    public void setTables(List<DatabaseFieldDefinition> tables) {
+    public void setTables(List<DatabaseTableDefinition> tables) {
         this.tables = tables;
     }
 }

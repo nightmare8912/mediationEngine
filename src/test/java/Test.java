@@ -1,4 +1,4 @@
-import org.prats.configParser.DatabaseConfigParser;
+import org.prats.internalFileHanldingUtilities.configParser.DatabaseConfigParser;
 import org.prats.definitions.DatabaseDefinition;
 import org.prats.database.h2Database.DatabaseInitializer;
 

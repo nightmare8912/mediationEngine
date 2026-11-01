@@ -1,4 +1,4 @@
-package org.prats.configParser;
+package org.prats.internalFileHanldingUtilities.configParser;
 
 public class AgentConfigParser {
     private String configFilePath;

@@ -5,6 +5,7 @@ public class FilePathDefinition {
     private String welcome;
     private String help;
     private String databaseConf;
+    private String platformConf;
 
     public String getWelcome() {
         return welcome;
@@ -28,5 +29,13 @@ public class FilePathDefinition {
 
     public void setDatabaseConf(String databaseConf) {
         this.databaseConf = databaseConf;
+    }
+
+    public String getPlatformConf() {
+        return platformConf;
+    }
+
+    public void setPlatformConf(String platformConf) {
+        this.platformConf = platformConf;
     }
 }

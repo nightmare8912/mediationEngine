@@ -1,9 +1,9 @@
 package org.prats.database.h2Database;
 
-import org.prats.configParser.ConfigParser;
+import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
 import org.prats.database.databaseUtilities.SQLSyntaxHelper;
 import org.prats.definitions.DatabaseDefinition;
-import org.prats.definitions.DatabaseFieldDefinition;
+import org.prats.definitions.DatabaseTableDefinition;
 import org.prats.definitions.TableDefinition;
 import org.prats.definitions.TableFieldDefinition;
 
@@ -88,9 +88,9 @@ public class TableInitializer {
         DatabaseDefinition databaseDefinition = configParser.initializeDatabaseConfig(databaseConfigFile);
 
         databaseDefinition.getTables().sort(
-                new Comparator<DatabaseFieldDefinition>() {
+                new Comparator<DatabaseTableDefinition>() {
                     @Override
-                    public int compare(DatabaseFieldDefinition o1, DatabaseFieldDefinition o2) {
+                    public int compare(DatabaseTableDefinition o1, DatabaseTableDefinition o2) {
                         return Integer.compare(
                                 o1.getCreationSequence(),
                                 o2.getCreationSequence()
@@ -108,7 +108,7 @@ public class TableInitializer {
                 databaseDefinition.getMaxConnections()
         );
 
-        for (DatabaseFieldDefinition table: databaseDefinition.getTables()) {
+        for (DatabaseTableDefinition table: databaseDefinition.getTables()) {
             try (Connection connection = H2DatabaseEngine.getConnection())
             {
                 System.out.println("Creating table: " + table.getTableId());

@@ -1,4 +1,4 @@
-package org.prats.configParser;
+package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
@@ -25,23 +25,23 @@ public class FilePathParser {
         Config config = ConfigFactory.parseFile(new File(configFilePath));
 
         // read the file paths
-        String welcomePath = config.getString("filepath.paths.welcome");
-        String helpPath = config.getString("filepath.paths.help");
+        String welcomePath      = config.getString("filepath.paths.welcome");
+        String helpPath         = config.getString("filepath.paths.help");
         String databaseConfPath = config.getString("filepath.paths.database_conf");
+        String platformConfPath = config.getString("filepath.paths.platform_conf");
 
         // set the file paths in the return value
         filePathDefinition.setWelcome(welcomePath);
         filePathDefinition.setHelp(helpPath);
         filePathDefinition.setDatabaseConf(databaseConfPath);
+        filePathDefinition.setPlatformConf(platformConfPath);
 
         return filePathDefinition;
     }
 
     public FilePathDefinition initializeFilePaths(String configFilePath) {
-
         // set the config path
         this.configFilePath = configFilePath;
-
         return initializeFilePaths();
     }
 }

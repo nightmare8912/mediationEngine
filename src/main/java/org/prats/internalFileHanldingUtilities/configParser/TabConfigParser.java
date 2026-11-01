@@ -1,4 +1,4 @@
-package org.prats.configParser;
+package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;

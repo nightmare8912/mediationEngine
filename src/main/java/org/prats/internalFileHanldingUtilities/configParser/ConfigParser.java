@@ -1,8 +1,6 @@
-package org.prats.configParser;
+package org.prats.internalFileHanldingUtilities.configParser;
 
-import org.prats.definitions.TabDefinition;
-import org.prats.definitions.TableDefinition;
-import org.prats.definitions.DatabaseDefinition;
+import org.prats.definitions.*;
 
 public class ConfigParser {
 
@@ -53,5 +51,35 @@ public class ConfigParser {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeDatabaseConfig();
+    }
+
+    public FilePathDefinition initializeFilePaths() {
+        return new FilePathParser().initializeFilePaths(configFilePath);
+    }
+
+    public FilePathDefinition initializeFilePaths(String configFilePath) {
+        // set the config path
+        this.configFilePath = configFilePath;
+        return initializeFilePaths();
+    }
+
+    public ECDefinition initializeECConfigs() {
+        return new ECConfigParser().initializeECConfigs(configFilePath);
+    }
+
+    public ECDefinition initializeECConfigs(String configFilePath) {
+        // set the config path
+        this.configFilePath = configFilePath;
+        return initializeECConfigs();
+    }
+
+    public PlatformDefinition initializePlatformConfigs() {
+        return new PlatformConfigParser().initializePlatformConfigs(configFilePath);
+    }
+
+    public PlatformDefinition initializePlatformConfigs(String configFilePath) {
+        // set the config path
+        this.configFilePath = configFilePath;
+        return initializePlatformConfigs();
     }
 }
