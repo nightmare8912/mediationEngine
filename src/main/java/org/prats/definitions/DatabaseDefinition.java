@@ -8,6 +8,9 @@ public class DatabaseDefinition {
     private String url;
     private String user;
     private String pass;
+    private long timeout;
+    private long idleTimeout;
+    private int maxConnections;
     private List<DatabaseFieldDefinition> tables;
 
     public String getLabel() {
@@ -48,6 +51,30 @@ public class DatabaseDefinition {
 
     public void setPass(String pass) {
         this.pass = pass;
+    }
+
+    public long getTimeout() {
+        return timeout;
+    }
+
+    public void setTimeout(long timeout) {
+        this.timeout = timeout;
+    }
+
+    public long getIdleTimeout() {
+        return idleTimeout;
+    }
+
+    public void setIdleTimeout(long idleTimeout) {
+        this.idleTimeout = idleTimeout;
+    }
+
+    public int getMaxConnections() {
+        return maxConnections;
+    }
+
+    public void setMaxConnections(int maxConnections) {
+        this.maxConnections = maxConnections;
     }
 
     public List<DatabaseFieldDefinition> getTables() {

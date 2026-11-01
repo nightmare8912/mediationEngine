@@ -32,6 +32,9 @@ public class DatabaseConfigParser {
         String databaseUrl   = config.getString("database.url");
         String databaseUser  = config.getString("database.user");
         String databasePass  = config.getString("database.pass");
+        long databaseTimeout = config.getLong("database.timeout");
+        long databaseIdleTimeout = config.getLong("database.idle_timeout");
+        int databaseMaxConnections = config.getInt("database.max_connections");
         var tables           = config.getConfigList("database.tables");
 
         for (Config table: tables)
@@ -52,6 +55,9 @@ public class DatabaseConfigParser {
         databaseDefinition.setUrl(databaseUrl);
         databaseDefinition.setUser(databaseUser);
         databaseDefinition.setPass(databasePass);
+        databaseDefinition.setTimeout(databaseTimeout);
+        databaseDefinition.setIdleTimeout(databaseIdleTimeout);
+        databaseDefinition.setMaxConnections(databaseMaxConnections);
         databaseDefinition.setTables(fieldDefinitionList);
 
         return databaseDefinition;

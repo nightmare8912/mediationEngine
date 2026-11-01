@@ -1,11 +1,6 @@
-import org.prats.configParser.ConfigParser;
 import org.prats.configParser.DatabaseConfigParser;
 import org.prats.definitions.DatabaseDefinition;
-import org.prats.definitions.DatabaseFieldDefinition;
-import org.prats.definitions.TableDefinition;
-import org.prats.definitions.TableFieldDefinition;
-import org.prats.h2Database.DatabaseInitializer;
-import org.prats.h2Database.TableInitializer;
+import org.prats.database.h2Database.DatabaseInitializer;
 
 import java.sql.Connection;
 import java.sql.ResultSet;

@@ -1,6 +1,7 @@
-package org.prats.h2Database;
+package org.prats.database.h2Database;
 
 import org.prats.configParser.ConfigParser;
+import org.prats.database.databaseUtilities.SQLSyntaxHelper;
 import org.prats.definitions.DatabaseDefinition;
 import org.prats.definitions.DatabaseFieldDefinition;
 import org.prats.definitions.TableDefinition;
@@ -9,10 +10,8 @@ import org.prats.definitions.TableFieldDefinition;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.List;
 
 public class TableInitializer {
     private String databaseConfigFile;
@@ -59,51 +58,15 @@ public class TableInitializer {
         return errorMessage;
     }
 
-    String generateCreateTableSQL(TableDefinition tableDefinition) {
-        StringBuilder sql = new StringBuilder();
-        sql.append("CREATE TABLE IF NOT EXISTS ")
-                .append(tableDefinition.getId())
-                .append(" (");
-
-        for (TableFieldDefinition tableFieldDefinition: tableDefinition.getFields())
-        {
-            sql.append(tableFieldDefinition.getId())
-                    .append(" ")
-                    .append(tableFieldDefinition.getType());
-
-            if (tableFieldDefinition.getRequired())
-                sql.append(" NOT NULL");
-
-            sql.append(", ");
-        }
-
-        List<String> primaryKeysList = new ArrayList<>();
-
-        for (TableFieldDefinition field : tableDefinition.getFields())
-        {
-            if (field.getPrimaryKey())
-                primaryKeysList.add(field.getId());
-        }
-
-        if (!primaryKeysList.isEmpty())
-        {
-            sql.append(" PRIMARY KEY (")
-                    .append(String.join(", ", primaryKeysList))
-                    .append(")");
-        }
-
-        sql.append(")");
-
-        return sql.toString();
-    }
 
     private StringBuilder createTable(Connection connection, TableDefinition tableDefinition) throws SQLException {
 
-        StringBuilder errorMessage = validateTable(tableDefinition);
+        SQLSyntaxHelper sqlSyntaxHelper = new SQLSyntaxHelper();
+        StringBuilder errorMessage      = validateTable(tableDefinition);
 
         if (errorMessage.isEmpty())
         {
-            String sql = generateCreateTableSQL(tableDefinition);
+            String sql = sqlSyntaxHelper.createTableStatementHelper(tableDefinition);
             System.out.println(sql);
             try (Statement statement = connection.createStatement())
             {
@@ -119,7 +82,7 @@ public class TableInitializer {
         return errorMessage;
     }
 
-    public boolean initializeDatabase() {
+    public void initializeDatabase() {
         StringBuilder errorMessage;
         ConfigParser configParser = new ConfigParser();
         DatabaseDefinition databaseDefinition = configParser.initializeDatabaseConfig(databaseConfigFile);
@@ -136,10 +99,17 @@ public class TableInitializer {
                 }
         );
 
+        H2DatabaseEngine.initialize(
+                databaseDefinition.getUrl(),
+                databaseDefinition.getUser(),
+                databaseDefinition.getPass(),
+                databaseDefinition.getTimeout(),
+                databaseDefinition.getIdleTimeout(),
+                databaseDefinition.getMaxConnections()
+        );
+
         for (DatabaseFieldDefinition table: databaseDefinition.getTables()) {
-            try (Connection connection = DatabaseInitializer.getConnection(
-                    databaseDefinition.getUrl(), databaseDefinition.getUser(), databaseDefinition.getPass()
-                    ))
+            try (Connection connection = H2DatabaseEngine.getConnection())
             {
                 System.out.println("Creating table: " + table.getTableId());
                 errorMessage = createTable(connection, configParser.initializeTableConfig(table.getPath()));
@@ -154,16 +124,15 @@ public class TableInitializer {
                     System.out.println("Created table: " + table.getTableId());
             } catch (SQLException sqle)
             {
-                System.out.println("Error with table " + table.getTableLabel() + sqle.getStackTrace());
+                System.out.println("Error with table " + table.getTableLabel() + Arrays.toString(sqle.getStackTrace()));
                 if (table.isCritical())
                     throw new RuntimeException("Critical error while initializing " + table.getTableLabel());
             }
         }
-        return true;
     }
 
-    public boolean initializeDatabase(String databaseConfigFile) {
+    public void initializeDatabase(String databaseConfigFile) {
         this.databaseConfigFile = databaseConfigFile;
-        return initializeDatabase();
+        initializeDatabase();
     }
 }

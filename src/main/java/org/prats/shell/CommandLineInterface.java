@@ -1,12 +1,11 @@
 package org.prats.shell;
 
-import org.prats.configParser.DatabaseConfigParser;
 import org.prats.configParser.FilePathParser;
+import org.prats.database.h2Database.H2DatabaseEngine;
 import org.prats.definitions.FilePathDefinition;
-import org.prats.h2Database.TableInitializer;
+import org.prats.database.h2Database.TableInitializer;
 import org.prats.internalFileHanldingUtilities.FileHandler;
 
-import java.io.IOException;
 import java.util.Scanner;
 
 public class CommandLineInterface {
@@ -36,6 +35,12 @@ public class CommandLineInterface {
         new TableInitializer().initializeDatabase(filePathDefinition.getDatabaseConf());
     }
 
+    public void shutdownH2Database() {
+        System.out.println("Shutting down H2 database...");
+        H2DatabaseEngine.shutdown();
+        System.out.println("Killed H2 database...");
+    }
+
     public void launch() {
 
         FilePathDefinition filePathDefinition = new FilePathParser().initializeFilePaths("/Users/pratyush./Desktop/coding/mediationEngine2/src/main/resources/shell/allFilePath.conf");
@@ -48,15 +53,18 @@ public class CommandLineInterface {
         {
             command = sc.nextLine();
             switch (command) {
-                case "meng help":               displayHelpMessage(filePathDefinition);
-                                                break;
-                case "meng exit":               displayExitMessage();
-                                                break;
-                case  "meng create tables":     createTablesFromConfig(filePathDefinition);
-                                                break;
+                case "meng help":                   displayHelpMessage(filePathDefinition);
+                                                    break;
+                case "meng exit":                   displayExitMessage();
+                                                    break;
+                case  "meng initialize h2db":       createTablesFromConfig(filePathDefinition);
+                                                    break;
 
-                default:                        displayCommandNotFoundMessage(command);
-                                                break;
+                case "meng shutdown h2db":          shutdownH2Database();
+                                                    break;
+
+                default:                            displayCommandNotFoundMessage(command);
+                                                    break;
             }
         }
     }
