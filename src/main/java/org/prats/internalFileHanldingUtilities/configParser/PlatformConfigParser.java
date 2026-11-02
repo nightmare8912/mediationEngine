@@ -31,11 +31,13 @@ public class PlatformConfigParser {
         String platformLabelId          = config.getString("platform.id");
         int platformTcpPort             = config.getInt("platform.tcp-port");
         int platformTcpBacklog          = config.getInt("platform.tcp-backlog");
+        String platformMainClas         = config.getString("platform.main-class");
         String platformClassPath        = config.getString("platform.class-path");
         int platformCoreThread          = config.getInt("platform.core-threads");
         int platformMaxThread           = config.getInt("platform.max-threads");
         int platformIdleTimeout         = config.getInt("platform.idle-timeout");
         int platformCoreIdleTimeout     = config.getInt("platform.core-idle-timeout");
+        String platformDatabaseConf     = config.getString("platform.database-conf");
         List<String> jvmArgs            = config.getStringList("platform.jvm-args");
         var ecConfigList                = config.getConfigList("platform.ec-configs");
 
@@ -54,11 +56,14 @@ public class PlatformConfigParser {
         platformDefinition.setLabel(platformLabel);
         platformDefinition.setId(platformLabelId);
         platformDefinition.setTcpPort(platformTcpPort);
+        platformDefinition.setTcpBacklog(platformTcpBacklog);
+        platformDefinition.setMainClass(platformMainClas);
         platformDefinition.setClassPath(platformClassPath);
         platformDefinition.setCoreThreads(platformCoreThread);
         platformDefinition.setMaxThreads(platformMaxThread);
         platformDefinition.setIdleTimeout(platformIdleTimeout);
         platformDefinition.setCoreIdleTimeout(platformCoreIdleTimeout);
+        platformDefinition.setDatabaseConfig(platformDatabaseConf);
         platformDefinition.setJvmArgs(jvmArgs);
         platformDefinition.setEcConfigs(platformECConfigDefinitions);
 

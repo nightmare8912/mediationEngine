@@ -1,10 +1,12 @@
 package org.prats.platform;
 
+import org.prats.messageHandler.MessageSource;
+import org.prats.platform.databaseService.DatabaseService;
+import org.prats.platform.messageService.MessageService;
+import org.prats.platform.tcpService.TCPService;
 import org.prats.threading.ThreadPool;
 
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -12,9 +14,13 @@ import java.util.concurrent.ExecutorService;
 public class Platform {
 
     private static int tcpPort, tcpBacklog, coreThreads, idleTimeout, maxThreads, coreIdleTimeout;
+    private static String databaseConfigFile;
 
-    private List<ContainerProcess> containerProcess;
+    private static List<ContainerProcess> containerProcess;
     private static ExecutorService threadPool;
+    private static DatabaseService databaseService;
+    private static MessageService messageService;
+    private static TCPService tcpService;
 
     public Platform() { this.containerProcess = new ArrayList<>(); }
 
@@ -37,6 +43,9 @@ public class Platform {
             }
             if (arg.startsWith("--core-idle-timeout=")) {
                 coreIdleTimeout = Integer.parseInt(arg.substring("--core-idle-timeout=".length()));
+            }
+            if (arg.startsWith("--database-conf=")) {
+                databaseConfigFile = arg.substring("--database-conf=".length());
             }
         }
     }
@@ -61,13 +70,30 @@ public class Platform {
     }
 
     public void startServices() {
-
+        databaseService = (DatabaseService) new DatabaseService().startService(
+                databaseConfigFile
+        );
+        messageService  = (MessageService) new MessageService(
+                coreThreads,
+                maxThreads,
+                idleTimeout,
+                MessageSource.PLATFORM
+        ).startService();
+        tcpService      = (TCPService) new TCPService(
+                tcpPort,
+                tcpBacklog,
+                coreThreads,
+                maxThreads,
+                idleTimeout,
+                MessageSource.PLATFORM,
+                messageService
+        ).startService();
     }
 
     public static void main(String[] args) throws IllegalArgumentException, IOException {
         // initializing the application params
-        int tcpPort     = -1;
-        int tcpBacklog  = -1;
+        int tcpPort       = -1;
+        int tcpBacklog    = -1;
         Platform platform = new Platform();
 
         // reading application input args to set up the platform application [the platform jvm has already been set up]
@@ -76,21 +102,8 @@ public class Platform {
         threadPool = new ThreadPool().initializeAndGetThreadPool(
                     coreThreads,
                     maxThreads,
-                    idleTimeout,
-                    coreIdleTimeout
+                    idleTimeout
         );
-
-        try(
-                ServerSocket serverSocket = new ServerSocket(
-                tcpPort,
-                tcpBacklog,
-                InetAddress.getLoopbackAddress()
-        )) {
-
-            while (true) {
-
-            }
-        }
-
+        platform.startServices();
     }
 }

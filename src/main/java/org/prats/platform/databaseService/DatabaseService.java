@@ -4,9 +4,9 @@ import com.zaxxer.hikari.HikariDataSource;
 import org.prats.database.h2Database.H2DatabaseEngine;
 import org.prats.definitions.DatabaseDefinition;
 import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
-import org.prats.platform.PlatformInterface;
+import org.prats.platform.Service;
 
-public class DatabaseService implements PlatformInterface {
+public class DatabaseService implements Service {
     private String databaseConfigFile;
     private static HikariDataSource dataSource;
 
@@ -14,7 +14,7 @@ public class DatabaseService implements PlatformInterface {
     public DatabaseService(String databaseConfigFile) {}
 
     @Override
-    public void startService() {
+    public Service startService() {
         // use the config parser
         DatabaseDefinition databaseDefinition = new ConfigParser().initializeDatabaseConfig(databaseConfigFile);
 
@@ -30,7 +30,12 @@ public class DatabaseService implements PlatformInterface {
 
         // get the static reference of database connection pool
         dataSource = H2DatabaseEngine.getDataSource();
+        return this;
+    }
 
+    public Service startService(String databaseConfigFile) {
+        this.databaseConfigFile = databaseConfigFile;
+        return startService();
     }
 
     @Override

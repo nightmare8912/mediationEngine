@@ -4,6 +4,7 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import org.prats.definitions.DatabaseDefinition;
 import org.prats.definitions.DatabaseTableDefinition;
+import org.prats.loggers.ShellLogger;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -24,18 +25,19 @@ public class DatabaseConfigParser {
         List<DatabaseTableDefinition> fieldDefinitionList = new ArrayList<>();
 
         // open, read and parse the config file
+        ShellLogger.log(configFilePath);
         Config config = ConfigFactory.parseFile(new File(configFilePath));
 
         // read the tab name and fields
-        String databaseLabel = config.getString("database.label");
-        String databaseId    = config.getString("database.id");
-        String databaseUrl   = config.getString("database.url");
-        String databaseUser  = config.getString("database.user");
-        String databasePass  = config.getString("database.pass");
-        long databaseTimeout = config.getLong("database.timeout");
-        long databaseIdleTimeout = config.getLong("database.idle_timeout");
-        int databaseMaxConnections = config.getInt("database.max_connections");
-        var tables           = config.getConfigList("database.tables");
+        String databaseLabel        = config.getString("database.label");
+        String databaseId           = config.getString("database.id");
+        String databaseUrl          = config.getString("database.url");
+        String databaseUser         = config.getString("database.user");
+        String databasePass         = config.getString("database.pass");
+        long databaseTimeout        = config.getLong("database.timeout");
+        long databaseIdleTimeout    = config.getLong("database.idle_timeout");
+        int databaseMaxConnections  = config.getInt("database.max_connections");
+        var tables                  = config.getConfigList("database.tables");
 
         for (Config table: tables)
         {

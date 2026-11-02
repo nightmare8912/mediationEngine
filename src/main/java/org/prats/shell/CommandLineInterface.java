@@ -5,6 +5,7 @@ import org.prats.database.h2Database.H2DatabaseEngine;
 import org.prats.definitions.FilePathDefinition;
 import org.prats.database.h2Database.TableInitializer;
 import org.prats.internalFileHanldingUtilities.FileHandler;
+import org.prats.loggers.ShellLogger;
 import org.prats.platform.PlatformInitializer;
 
 import java.io.IOException;
@@ -23,11 +24,11 @@ public class CommandLineInterface {
     }
 
     public void displayWelcomeMessage(FilePathDefinition filePathDefinition) {
-        System.out.println(fileHandler.openAndRead(filePathDefinition.getWelcome()));
+        ShellLogger.log(fileHandler.openAndRead(filePathDefinition.getWelcome()));
     }
 
     public void displayHelpMessage(FilePathDefinition filePathDefinition) {
-        System.out.println(fileHandler.openAndRead(filePathDefinition.getHelp()));
+        ShellLogger.log(fileHandler.openAndRead(filePathDefinition.getHelp()));
     }
 
     public void displayCommandNotFoundMessage(String command) {
@@ -39,27 +40,27 @@ public class CommandLineInterface {
     }
 
     public void createTablesFromConfig(FilePathDefinition filePathDefinition) {
-        System.out.println("Creating tables...");
+        ShellLogger.log("Creating tables...");
         new TableInitializer().initializeDatabase(filePathDefinition.getDatabaseConf());
     }
 
     public void startPlatform(FilePathDefinition filePathDefinition) {
-        System.out.println("Starting platform...");
+        ShellLogger.log("Starting platform...");
         try
         {
-            platformInitializer.initializePlatform(new ArrayList<>(), filePathDefinition.getDatabaseConf());
-            System.out.println("Started platform.");
+            ShellLogger.log("" + platformInitializer.initializePlatform(new ArrayList<>(), filePathDefinition.getPlatformConf()).pid());
+            ShellLogger.log("Started platform.");
         }
         catch (IOException ioe)
         {
-            System.out.println("Unable to start platform..." + Arrays.toString(ioe.getStackTrace()));
+            ShellLogger.log("Unable to start platform..." + Arrays.toString(ioe.getStackTrace()));
         }
     }
 
     public void shutdownH2Database() {
-        System.out.println("Shutting down H2 database...");
+        ShellLogger.log("Shutting down H2 database...");
         H2DatabaseEngine.shutdown();
-        System.out.println("Killed H2 database...");
+        ShellLogger.log("Killed H2 database...");
     }
 
     public void launch() {

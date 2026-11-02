@@ -7,6 +7,7 @@ public class ECDefinition {
     private String label;
     private int tcpPort;
     private int tcpBacklog;
+    private String mainClass;
     private String classPath;
     private int coreThreads;
     private int maxThreads;
@@ -45,6 +46,14 @@ public class ECDefinition {
 
     public void setTcpBacklog(int tcpBacklog) {
         this.tcpBacklog = tcpBacklog;
+    }
+
+    public String getMainClass() {
+        return mainClass;
+    }
+
+    public void setMainClass(String mainClass) {
+        this.mainClass = mainClass;
     }
 
     public String getClassPath() {

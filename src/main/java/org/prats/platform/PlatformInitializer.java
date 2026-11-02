@@ -28,13 +28,16 @@ public class PlatformInitializer {
         platformAppArgs.add("--max-threads=" + platformDefinition.getMaxThreads());
         platformAppArgs.add("--idle-timeout=" + platformDefinition.getIdleTimeout());
         platformAppArgs.add("--core-idle-timeout=" + platformDefinition.getCoreIdleTimeout());
+        platformAppArgs.add("--database-conf="+platformDefinition.getDatabaseConfig());
 
         // adding any additional params that the user might have passed from the shell
         platformAppArgs.addAll(additionalPlatformAppArgs);
 
         return new JVMLauncher().launchJvm(
+                platformDefinition.getId(),
                 platformDefinition.getJvmArgs(),
                 platformDefinition.getClassPath(),
+                platformDefinition.getMainClass(),
                 platformAppArgs
         );
     }

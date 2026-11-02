@@ -31,6 +31,7 @@ public class ECConfigParser {
         String ecId             = config.getString("ec.id");
         int ecTcpPort           = config.getInt("ec.tcp-port");
         int ecTcpBacklog        = config.getInt("tcp-backlog");
+        String ecMainClass      = config.getString("ec.main-class");
         String ecClassPath      = config.getString("ec.class-path");
         int ecCoreThread        = config.getInt("ec.core-threads");
         int ecMaxThread         = config.getInt("ec.max-threads");
@@ -43,6 +44,7 @@ public class ECConfigParser {
         ecDefinition.setId(ecId);
         ecDefinition.setTcpPort(ecTcpPort);
         ecDefinition.setTcpBacklog(ecTcpBacklog);
+        ecDefinition.setMainClass(ecMainClass);
         ecDefinition.setClassPath(ecClassPath);
         ecDefinition.setCoreThreads(ecCoreThread);
         ecDefinition.setMaxThreads(ecMaxThread);
