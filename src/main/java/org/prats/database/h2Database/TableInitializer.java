@@ -1,7 +1,7 @@
 package org.prats.database.h2Database;
 
 import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
-import org.prats.database.databaseUtilities.SQLSyntaxHelper;
+import org.prats.database.databaseUtilities.sqlHelper.SQLSyntaxHelper;
 import org.prats.definitions.DatabaseDefinition;
 import org.prats.definitions.DatabaseTableDefinition;
 import org.prats.definitions.TableDefinition;

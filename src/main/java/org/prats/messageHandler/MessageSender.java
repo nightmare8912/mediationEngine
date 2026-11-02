@@ -1,7 +1,7 @@
 package org.prats.messageHandler;
 
-import org.prats.platform.tcpService.ClientConnection;
+import org.prats.definitions.ClientConnectionDefinition;
 
 public interface MessageSender {
-    void sendMessage(String message, ClientConnection connection);
+    void sendMessage(String message, ClientConnectionDefinition connection);
 }

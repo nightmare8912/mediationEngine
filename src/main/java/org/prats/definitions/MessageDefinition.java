@@ -1,64 +1,59 @@
 package org.prats.definitions;
 
-import org.prats.messageHandler.MessageSource;
-import org.prats.messageHandler.MessageType;
+import com.fasterxml.jackson.databind.JsonNode;
 
+import java.time.Instant;
 import java.util.UUID;
 
 public final class MessageDefinition {
-    private final MessageType messageType;
+
     private final UUID messageId;
     private UUID correlationId;
-    private final MessageSource messageSource;
-    private final String message;
-    private String response;
+
+    private final MessageTypeDefinition messageTypeDefinition;
+    private final ProcessTypeDefinition processTypeDefinition;
+
+    private OperationDefinition operation;
+
+    private final Instant timestamp;
+
+    private JsonNode payload;
+
+    private String status;
+    private ErrorDefinition error;
 
     public MessageDefinition(
-            MessageType     messageType,
-            MessageSource   messageSource,
-            String          message
+            MessageTypeDefinition messageTypeDefinition,
+            ProcessTypeDefinition processTypeDefinition,
+            OperationDefinition operation,
+            JsonNode payload
     ) {
-        messageId          = UUID.randomUUID();
-        this.messageType   = messageType;
-        this.messageSource = messageSource;
-        this.message       = message;
+        this.messageId = UUID.randomUUID();
+        this.messageTypeDefinition = messageTypeDefinition;
+        this.processTypeDefinition = processTypeDefinition;
+        this.operation = operation;
+        this.payload = payload;
+        this.timestamp = Instant.now();
     }
 
     public MessageDefinition(
-            MessageType   messageType,
-            MessageSource messageSource,
-            String        message,
-            UUID          correlationId
+            MessageTypeDefinition messageTypeDefinition,
+            ProcessTypeDefinition processTypeDefinition,
+            OperationDefinition operation,
+            JsonNode payload,
+            UUID correlationId
     ) {
-        messageId          = UUID.randomUUID();
-        this.messageType   = messageType;
-        this.messageSource = messageSource;
-        this.message       = message;
+        this.messageId = UUID.randomUUID();
+        this.messageTypeDefinition = messageTypeDefinition;
+        this.processTypeDefinition = processTypeDefinition;
+        this.operation = operation;
+        this.payload = payload;
         this.correlationId = correlationId;
-    }
-
-    public MessageType getMessageType() {
-        return messageType;
+        this.timestamp = Instant.now();
     }
 
     public UUID getMessageId() {
         return messageId;
-    }
-
-    public MessageSource getMessageSource() {
-        return messageSource;
-    }
-
-    public String getMessage() {
-        return message;
-    }
-
-    public String getResponse() {
-        return response;
-    }
-
-    public void setResponse(String response) {
-        this.response = response;
     }
 
     public UUID getCorrelationId() {
@@ -67,5 +62,41 @@ public final class MessageDefinition {
 
     public void setCorrelationId(UUID correlationId) {
         this.correlationId = correlationId;
+    }
+
+    public MessageTypeDefinition getMessageType() {
+        return messageTypeDefinition;
+    }
+
+    public ProcessTypeDefinition getMessageSource() {
+        return processTypeDefinition;
+    }
+
+    public OperationDefinition getOperation() {
+        return operation;
+    }
+
+    public void setOperation(OperationDefinition operation) {
+        this.operation = operation;
+    }
+
+    public Instant getTimestamp() {
+        return timestamp;
+    }
+
+    public JsonNode getPayload() {
+        return payload;
+    }
+
+    public void setPayload(JsonNode payload) {
+        this.payload = payload;
+    }
+
+    public ErrorDefinition getError() {
+        return error;
+    }
+
+    public void setError(ErrorDefinition error) {
+        this.error = error;
     }
 }

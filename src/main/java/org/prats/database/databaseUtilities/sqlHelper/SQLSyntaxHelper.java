@@ -1,4 +1,4 @@
-package org.prats.database.databaseUtilities;
+package org.prats.database.databaseUtilities.sqlHelper;
 
 import org.prats.definitions.TableDefinition;
 import org.prats.definitions.TableFieldDefinition;

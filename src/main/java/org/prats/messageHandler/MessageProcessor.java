@@ -1,76 +1,100 @@
 package org.prats.messageHandler;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import org.prats.definitions.MessageDefinition;
-import org.prats.loggers.ShellLogger;
-import org.prats.platform.Platform;
-import org.prats.platform.tcpService.ClientConnection;
-
-import java.net.Socket;
+import org.prats.definitions.MessageEntity;
+import org.prats.definitions.ProcessTypeDefinition;
+import org.prats.services.messageService.MessageService;
+import org.prats.definitions.ClientConnectionDefinition;
 
 public class MessageProcessor {
 
     private final MessageParser messageParser;
-    private final PingResponder pingResponder;
-    private final MessageSource messageSource;
+    private final ProcessTypeDefinition processTypeDefinition;
+    private MessageService messageService;
 
-    public MessageProcessor(MessageSource messageSource) {
-        this.messageParser = new MessageParser();
-        this.pingResponder = new PingResponder();
-        this.messageSource = messageSource;
-    }
+    private final DatabaseMessageHandler databaseMessageHandler;
+    private final GUIMessageHandler guiMessageHandler;
+    private final ECMessageHandler ecMessageHandler;
+    private final TerminalMessageHandler terminalMessageHandler;
+    private final MiscellaneousMessageHandler miscellaneousMessageHandler;
 
-    public MessageDefinition createMessage(
-            MessageType     messageType,
-            MessageSource   messageSource,
-            String          message
+
+    public MessageProcessor(
+            ProcessTypeDefinition processTypeDefinition,
+            MessageService messageService
     ) {
-        return new MessageDefinition(messageType, messageSource, message);
+        this.messageParser                  = new MessageParser(processTypeDefinition);
+        this.processTypeDefinition = processTypeDefinition;
+        this.messageService                 = messageService;
+        this.databaseMessageHandler         = new DatabaseMessageHandler(this);
+        this.guiMessageHandler              = new GUIMessageHandler(this);
+        this.ecMessageHandler               = new ECMessageHandler(this);
+        this.terminalMessageHandler         = new TerminalMessageHandler(this);
+        this.miscellaneousMessageHandler    = new MiscellaneousMessageHandler(this);
     }
 
-    public void forwardMessage(MessageDefinition message, ClientConnection clientConnection)
-            throws JsonProcessingException {
+    public ProcessTypeDefinition getProcessTypeDefinition() {
+        return processTypeDefinition;
+    }
 
-        if (message.getMessageSource() == MessageSource.DATABASE) {
+    // i would generally want the message service threads to not do the complete process (ie deliver message then wait for receiver to respond and deliver it back to sender ), they should just deliver the message and return back to their pool
+    // as the receiver process may take some time to respond or may not even respond, which would cause our message service threads to get stuck (leak)
+    // however, in case of miscellaneous messages, the same thread can respond, as it is a miscellaneous message, we dnt know where to deliver the message so we can just send a response back
+    public void forwardMessage(MessageEntity messageEntity) {
+
+        ProcessTypeDefinition sourceProcess = messageEntity.getMessageDefinition().getMessageSource();
+
+        if (sourceProcess == ProcessTypeDefinition.DATABASE) {
             // forward to database/sql message handler
+            databaseMessageHandler.handleMessage(
+                    messageEntity
+            );
         }
-        else if (message.getMessageSource() == MessageSource.GUI) {
+        else if (sourceProcess == ProcessTypeDefinition.GUI) {
             // forward to gui message handler
+            guiMessageHandler.handleMessage(
+                    messageEntity
+            );
         }
-        else if (message.getMessageSource() == MessageSource.EC) {
+        else if (sourceProcess == ProcessTypeDefinition.EC) {
             // forward to ec message handler
+            ecMessageHandler.handleMessage(
+                    messageEntity
+            );
         }
-        else if (message.getMessageSource() == MessageSource.TERMINAL) {
-
+        else if (sourceProcess == ProcessTypeDefinition.TERMINAL) {
+            // forward to terminal message handler
+            terminalMessageHandler.handleMessage(
+                    messageEntity
+            );
         }
         else  {
-            sendMessage(
-                new MessageDefinition(
-                        MessageType.ACK,
-                        messageSource,
-                        "Running"
-                ),
-                clientConnection
+            // forward to miscellaneous message handler
+            miscellaneousMessageHandler.handleMessage(
+                    messageEntity
             );
         }
 
     }
 
+    // well this reads the string message from other services and standardizes it, and then sends it over to forwardMessage from where it would be sent to dedicated handlers
+    public void processMessage (String message, ReplyChannel replyChannel) {
+        forwardMessage(
+                new MessageEntity(
+                        messageParser.createMessageFromJSON(
+                                message
+                        ),
+                        replyChannel
+                )
+        );
+    }
+
     public void sendMessage(
-            MessageDefinition messageDefinition,
-            ClientConnection clientConnection
+            MessageEntity messageEntity
     ) {
-        try {
-            messageParser.createJSONFromMessage(messageDefinition);
-            clientConnection.sendMessage(messageParser.createJSONFromMessage(messageDefinition));
-        } catch (Exception exe) {
-            ShellLogger.log(exe.getMessage());
-        }
+        messageEntity.getReplyChannel().sendMessage(
+                messageParser.createJSONFromMessage(
+                        messageEntity.getMessageDefinition()
+                )
+        );
     }
-
-    public void processMessage (String message, ClientConnection clientConnection)
-            throws JsonProcessingException {
-        forwardMessage(messageParser.createMessageFromJSON(message), clientConnection);
-    }
-
 }

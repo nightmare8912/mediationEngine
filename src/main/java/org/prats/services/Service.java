@@ -1,4 +1,4 @@
-package org.prats.platform;
+package org.prats.services;
 
 public interface Service {
     public Service startService();

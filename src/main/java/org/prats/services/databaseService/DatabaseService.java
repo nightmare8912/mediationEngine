@@ -1,11 +1,11 @@
-package org.prats.platform.databaseService;
+package org.prats.services.databaseService;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.prats.database.h2Database.H2DatabaseEngine;
 import org.prats.definitions.DatabaseDefinition;
 import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
 import org.prats.loggers.ShellLogger;
-import org.prats.platform.Service;
+import org.prats.services.Service;
 
 public class DatabaseService implements Service {
     private String databaseConfigFile;
@@ -34,6 +34,21 @@ public class DatabaseService implements Service {
         dataSource = H2DatabaseEngine.getDataSource();
         return this;
     }
+
+//    public int executeUpdate(String sql) {
+//        try (
+//                Connection connection = dataSource.getConnection();
+//                Statement statement   = connection.createStatement();
+//        ) {
+//            statement.executeUpdate(sql);
+//        } catch (SQLException sqlException) {
+//
+//        }
+//    }
+
+//    public ResultSet executeQuery(String sql) {
+//
+//    }
 
     public Service startService(String databaseConfigFile) {
         this.databaseConfigFile = databaseConfigFile;

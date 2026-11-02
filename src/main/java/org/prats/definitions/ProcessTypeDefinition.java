@@ -1,6 +1,6 @@
-package org.prats.messageHandler;
+package org.prats.definitions;
 
-public enum MessageSource {
+public enum ProcessTypeDefinition {
     GUI,
     DATABASE,
     EC,

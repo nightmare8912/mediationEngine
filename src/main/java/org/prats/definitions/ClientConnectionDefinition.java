@@ -1,15 +1,15 @@
-package org.prats.platform.tcpService;
+package org.prats.definitions;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
 
-public class ClientConnection {
+public class ClientConnectionDefinition {
     private final Socket socket;
     private final BufferedWriter writer;
 
-    public ClientConnection (Socket socket)
+    public ClientConnectionDefinition(Socket socket)
             throws IOException {
         this.socket = socket;
         this.writer = new BufferedWriter(
