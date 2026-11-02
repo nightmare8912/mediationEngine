@@ -2,8 +2,7 @@ package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import org.prats.definitions.ECDefinition;
-import org.prats.definitions.ECJVMArgsDefinition;
+import org.prats.definitions.EC;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -18,9 +17,9 @@ public class ECConfigParser {
         this.configFilePath = configFilePath;
     }
 
-    public ECDefinition initializeECConfigs() {
+    public EC initializeECConfigs() {
         // declare the variables
-        ECDefinition ecDefinition       = new ECDefinition();
+        EC ec = new EC();
         List<String> ecjvmArgsDefinitions = new ArrayList<>();
 
         // open, read and parse the config file
@@ -40,22 +39,22 @@ public class ECConfigParser {
         List<String> jvmArgs    = config.getStringList("ec.jvm-args");
 
         // set the fields of the tab and its name in the return value
-        ecDefinition.setLabel(ecLabel);
-        ecDefinition.setId(ecId);
-        ecDefinition.setTcpPort(ecTcpPort);
-        ecDefinition.setTcpBacklog(ecTcpBacklog);
-        ecDefinition.setMainClass(ecMainClass);
-        ecDefinition.setClassPath(ecClassPath);
-        ecDefinition.setCoreThreads(ecCoreThread);
-        ecDefinition.setMaxThreads(ecMaxThread);
-        ecDefinition.setIdleTimeout(ecIdleTimeout);
-        ecDefinition.setCoreIdleTimeout(ecCoreIdleTimeout);
-        ecDefinition.setJvmArgs(ecjvmArgsDefinitions);
+        ec.setLabel(ecLabel);
+        ec.setId(ecId);
+        ec.setTcpPort(ecTcpPort);
+        ec.setTcpBacklog(ecTcpBacklog);
+        ec.setMainClass(ecMainClass);
+        ec.setClassPath(ecClassPath);
+        ec.setCoreThreads(ecCoreThread);
+        ec.setMaxThreads(ecMaxThread);
+        ec.setIdleTimeout(ecIdleTimeout);
+        ec.setCoreIdleTimeout(ecCoreIdleTimeout);
+        ec.setJvmArgs(ecjvmArgsDefinitions);
 
-        return ecDefinition;
+        return ec;
     }
 
-    public ECDefinition initializeECConfigs(String configFilePath) {
+    public EC initializeECConfigs(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeECConfigs();

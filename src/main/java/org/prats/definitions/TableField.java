@@ -1,12 +1,12 @@
 package org.prats.definitions;
 
-public class TabFieldDefinition {
+public class TableField {
 
     private String id;
     private String label;
     private String type;
     private boolean required;
-    private boolean enabled;
+    private boolean primaryKey;
 
     public String getId() { return id; }
 
@@ -14,12 +14,12 @@ public class TabFieldDefinition {
         this.id = id;
     }
 
-    public boolean isEnabled() {
-        return enabled;
+    public boolean getPrimaryKey() {
+        return primaryKey;
     }
 
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
+    public void setPrimaryKey(boolean primaryKey) {
+        this.primaryKey = primaryKey;
     }
 
     public String getLabel() {
@@ -38,7 +38,7 @@ public class TabFieldDefinition {
         this.type = type;
     }
 
-    public boolean isRequired() {
+    public boolean getRequired() {
         return required;
     }
 

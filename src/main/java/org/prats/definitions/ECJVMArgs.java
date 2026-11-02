@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public class ECJVMArgsDefinition {
+public class ECJVMArgs {
     private String jvmArg;
 
     public String getJvmArg() {

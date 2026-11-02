@@ -2,7 +2,7 @@ package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import org.prats.definitions.FilePathDefinition;
+import org.prats.definitions.FilePath;
 
 import java.io.File;
 
@@ -16,10 +16,10 @@ public class FilePathParser {
         this.configFilePath = configFilePath;
     }
 
-    public FilePathDefinition initializeFilePaths() {
+    public FilePath initializeFilePaths() {
 
         // declare the variables
-        FilePathDefinition filePathDefinition = new FilePathDefinition();
+        FilePath filePath = new FilePath();
 
         // open, read and parse the config file
         Config config = ConfigFactory.parseFile(new File(configFilePath));
@@ -31,15 +31,15 @@ public class FilePathParser {
         String platformConfPath = config.getString("filepath.paths.platform_conf");
 
         // set the file paths in the return value
-        filePathDefinition.setWelcome(welcomePath);
-        filePathDefinition.setHelp(helpPath);
-        filePathDefinition.setDatabaseConf(databaseConfPath);
-        filePathDefinition.setPlatformConf(platformConfPath);
+        filePath.setWelcome(welcomePath);
+        filePath.setHelp(helpPath);
+        filePath.setDatabaseConf(databaseConfPath);
+        filePath.setPlatformConf(platformConfPath);
 
-        return filePathDefinition;
+        return filePath;
     }
 
-    public FilePathDefinition initializeFilePaths(String configFilePath) {
+    public FilePath initializeFilePaths(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeFilePaths();

@@ -3,23 +3,23 @@ package org.prats.definitions;
 import org.prats.messageHandler.ReplyChannel;
 
 public class MessageEntity {
-    private MessageDefinition messageDefinition;
+    private Message message;
     private ReplyChannel      replyChannel;
 
     public MessageEntity(
-            MessageDefinition messageDefinition,
+            Message message,
             ReplyChannel replyChannel
     ) {
-        this.messageDefinition  = messageDefinition;
+        this.message = message;
         this.replyChannel       = replyChannel;
     }
 
-    public MessageDefinition getMessageDefinition() {
-        return messageDefinition;
+    public Message getMessageDefinition() {
+        return message;
     }
 
-    public void setMessageDefinition(MessageDefinition messageDefinition) {
-        this.messageDefinition = messageDefinition;
+    public void setMessageDefinition(Message message) {
+        this.message = message;
     }
 
     public ReplyChannel getReplyChannel() {

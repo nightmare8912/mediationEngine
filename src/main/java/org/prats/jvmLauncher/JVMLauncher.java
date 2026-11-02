@@ -1,6 +1,5 @@
 package org.prats.jvmLauncher;
 
-import org.prats.definitions.PlatformDefinition;
 import org.prats.loggers.ShellLogger;
 
 import java.io.IOException;

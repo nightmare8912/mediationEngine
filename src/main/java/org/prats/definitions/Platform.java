@@ -2,15 +2,15 @@ package org.prats.definitions;
 
 import java.util.List;
 
-public class PlatformDefinition extends ECDefinition {
-    private List<PlatformECConfigDefinition> ecConfigs;
+public class Platform extends EC {
+    private List<PlatformECConfig> ecConfigs;
     private String databaseConfig;
 
-    public List<PlatformECConfigDefinition> getEcConfigs() {
+    public List<PlatformECConfig> getEcConfigs() {
         return ecConfigs;
     }
 
-    public void setEcConfigs(List<PlatformECConfigDefinition> ecConfigs) {
+    public void setEcConfigs(List<PlatformECConfig> ecConfigs) {
         this.ecConfigs = ecConfigs;
     }
 

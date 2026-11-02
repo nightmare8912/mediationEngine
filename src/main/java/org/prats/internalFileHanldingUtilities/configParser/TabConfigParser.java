@@ -2,8 +2,8 @@ package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import org.prats.definitions.TabDefinition;
-import org.prats.definitions.TabFieldDefinition;
+import org.prats.definitions.Tab;
+import org.prats.definitions.TabField;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -18,10 +18,10 @@ public class TabConfigParser {
         this.configFilePath = configFilePath;
     }
 
-    public TabDefinition initializeTabConfigs() {
+    public Tab initializeTabConfigs() {
         // declare the variables
-        TabDefinition            tabDefinition       = new TabDefinition();
-        List<TabFieldDefinition> fieldDefinitionList = new ArrayList<>();
+        Tab tab = new Tab();
+        List<TabField> fieldDefinitionList = new ArrayList<>();
 
         // open, read and parse the config file
         Config config = ConfigFactory.parseFile(new File(configFilePath));
@@ -32,7 +32,7 @@ public class TabConfigParser {
 
         for (Config field: fields)
         {
-            TabFieldDefinition fieldDefinition = new TabFieldDefinition();
+            TabField fieldDefinition = new TabField();
             fieldDefinition.setId(field.getString("id"));
             fieldDefinition.setLabel(field.getString("label"));
             fieldDefinition.setType(field.getString("type"));
@@ -43,13 +43,13 @@ public class TabConfigParser {
         }
 
         // set the fields of the tab and its name in the return value
-        tabDefinition.setLabel(tabLabel);
-        tabDefinition.setFields(fieldDefinitionList);
+        tab.setLabel(tabLabel);
+        tab.setFields(fieldDefinitionList);
 
-        return tabDefinition;
+        return tab;
     }
 
-    public TabDefinition initializeTabConfigs(String configFilePath) {
+    public Tab initializeTabConfigs(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeTabConfigs();

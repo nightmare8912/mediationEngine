@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public class FilePathDefinition {
+public class FilePath {
 
     private String welcome;
     private String help;

@@ -2,7 +2,7 @@ package org.prats.definitions;
 
 import java.util.List;
 
-public class DatabaseDefinition {
+public class Database {
     private String label;
     private String id;
     private String url;
@@ -11,7 +11,7 @@ public class DatabaseDefinition {
     private long timeout;
     private long idleTimeout;
     private int maxConnections;
-    private List<DatabaseTableDefinition> tables;
+    private List<DatabaseTable> tables;
 
     public String getLabel() {
         return label;
@@ -77,11 +77,11 @@ public class DatabaseDefinition {
         this.maxConnections = maxConnections;
     }
 
-    public List<DatabaseTableDefinition> getTables() {
+    public List<DatabaseTable> getTables() {
         return tables;
     }
 
-    public void setTables(List<DatabaseTableDefinition> tables) {
+    public void setTables(List<DatabaseTable> tables) {
         this.tables = tables;
     }
 }

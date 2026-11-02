@@ -5,47 +5,47 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.util.UUID;
 
-public final class MessageDefinition {
+public final class Message {
 
     private final UUID messageId;
     private UUID correlationId;
 
-    private final MessageTypeDefinition messageTypeDefinition;
-    private final ProcessTypeDefinition processTypeDefinition;
+    private final MessageType messageType;
+    private final ProcessType processType;
 
-    private OperationDefinition operation;
+    private Operation operation;
 
     private final Instant timestamp;
 
     private JsonNode payload;
 
     private String status;
-    private ErrorDefinition error;
+    private Error error;
 
-    public MessageDefinition(
-            MessageTypeDefinition messageTypeDefinition,
-            ProcessTypeDefinition processTypeDefinition,
-            OperationDefinition operation,
+    public Message(
+            MessageType messageType,
+            ProcessType processType,
+            Operation operation,
             JsonNode payload
     ) {
         this.messageId = UUID.randomUUID();
-        this.messageTypeDefinition = messageTypeDefinition;
-        this.processTypeDefinition = processTypeDefinition;
+        this.messageType = messageType;
+        this.processType = processType;
         this.operation = operation;
         this.payload = payload;
         this.timestamp = Instant.now();
     }
 
-    public MessageDefinition(
-            MessageTypeDefinition messageTypeDefinition,
-            ProcessTypeDefinition processTypeDefinition,
-            OperationDefinition operation,
+    public Message(
+            MessageType messageType,
+            ProcessType processType,
+            Operation operation,
             JsonNode payload,
             UUID correlationId
     ) {
         this.messageId = UUID.randomUUID();
-        this.messageTypeDefinition = messageTypeDefinition;
-        this.processTypeDefinition = processTypeDefinition;
+        this.messageType = messageType;
+        this.processType = processType;
         this.operation = operation;
         this.payload = payload;
         this.correlationId = correlationId;
@@ -64,19 +64,19 @@ public final class MessageDefinition {
         this.correlationId = correlationId;
     }
 
-    public MessageTypeDefinition getMessageType() {
-        return messageTypeDefinition;
+    public MessageType getMessageType() {
+        return messageType;
     }
 
-    public ProcessTypeDefinition getMessageSource() {
-        return processTypeDefinition;
+    public ProcessType getMessageSource() {
+        return processType;
     }
 
-    public OperationDefinition getOperation() {
+    public Operation getOperation() {
         return operation;
     }
 
-    public void setOperation(OperationDefinition operation) {
+    public void setOperation(Operation operation) {
         this.operation = operation;
     }
 
@@ -92,11 +92,11 @@ public final class MessageDefinition {
         this.payload = payload;
     }
 
-    public ErrorDefinition getError() {
+    public Error getError() {
         return error;
     }
 
-    public void setError(ErrorDefinition error) {
+    public void setError(Error error) {
         this.error = error;
     }
 }

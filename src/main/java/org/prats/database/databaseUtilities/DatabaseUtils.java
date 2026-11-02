@@ -2,11 +2,10 @@ package org.prats.database.databaseUtilities;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.prats.definitions.MessageDefinition;
-import org.prats.definitions.OperationDefinition;
+import org.prats.definitions.Message;
 import org.prats.messageHandler.MessageParser;
-import org.prats.definitions.ProcessTypeDefinition;
-import org.prats.definitions.MessageTypeDefinition;
+import org.prats.definitions.ProcessType;
+import org.prats.definitions.MessageType;
 
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -18,16 +17,16 @@ import java.util.Map;
 
 public class DatabaseUtils {
     private MessageParser messageParser;
-    private ProcessTypeDefinition processTypeDefinition;
+    private ProcessType processType;
     private ObjectMapper objectMapper;
 
-    public DatabaseUtils(ProcessTypeDefinition processTypeDefinition) {
+    public DatabaseUtils(ProcessType processType) {
         this.objectMapper   = new ObjectMapper();
-        this.processTypeDefinition = processTypeDefinition;
-        messageParser       = new MessageParser(processTypeDefinition);
+        this.processType = processType;
+        messageParser       = new MessageParser(processType);
     }
 
-    public String createMessageFromDBResponse(MessageDefinition originalMessage, ResultSet rs)
+    public String createMessageFromDBResponse(Message originalMessage, ResultSet rs)
             throws SQLException, JsonProcessingException {
 
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -45,9 +44,9 @@ public class DatabaseUtils {
         }
         return
                 messageParser.createJSONFromMessage(
-                        new MessageDefinition(
-                                MessageTypeDefinition.INFO,
-                                processTypeDefinition,
+                        new Message(
+                                MessageType.INFO,
+                                processType,
                                 originalMessage.getOperation(),
                                 objectMapper.valueToTree(rows),
                                 originalMessage.getCorrelationId()

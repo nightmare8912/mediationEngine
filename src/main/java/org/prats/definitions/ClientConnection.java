@@ -5,11 +5,11 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
 
-public class ClientConnectionDefinition {
+public class ClientConnection {
     private final Socket socket;
     private final BufferedWriter writer;
 
-    public ClientConnectionDefinition(Socket socket)
+    public ClientConnection(Socket socket)
             throws IOException {
         this.socket = socket;
         this.writer = new BufferedWriter(

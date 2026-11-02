@@ -2,7 +2,7 @@ package org.prats.services.databaseService;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.prats.database.h2Database.H2DatabaseEngine;
-import org.prats.definitions.DatabaseDefinition;
+import org.prats.definitions.Database;
 import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
 import org.prats.loggers.ShellLogger;
 import org.prats.services.Service;
@@ -18,16 +18,16 @@ public class DatabaseService implements Service {
     public Service startService() {
         // use the config parser
         ShellLogger.log("");
-        DatabaseDefinition databaseDefinition = new ConfigParser().initializeDatabaseConfig(databaseConfigFile);
+        Database database = new ConfigParser().initializeDatabaseConfig(databaseConfigFile);
 
         // initialize the connection pool and the database
         H2DatabaseEngine.initialize(
-                databaseDefinition.getUrl(),
-                databaseDefinition.getUser(),
-                databaseDefinition.getPass(),
-                databaseDefinition.getTimeout(),
-                databaseDefinition.getIdleTimeout(),
-                databaseDefinition.getMaxConnections()
+                database.getUrl(),
+                database.getUser(),
+                database.getPass(),
+                database.getTimeout(),
+                database.getIdleTimeout(),
+                database.getMaxConnections()
         );
 
         // get the static reference of database connection pool

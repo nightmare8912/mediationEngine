@@ -4,10 +4,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.prats.definitions.MessageDefinition;
-import org.prats.definitions.ProcessTypeDefinition;
-import org.prats.definitions.MessageTypeDefinition;
-import org.prats.definitions.OperationDefinition;
+import org.prats.definitions.Message;
+import org.prats.definitions.ProcessType;
+import org.prats.definitions.MessageType;
+import org.prats.definitions.Operation;
 import org.prats.loggers.ShellLogger;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -15,13 +15,13 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 public class MessageParser {
 
     private final ObjectMapper objectMapper;
-    private final ProcessTypeDefinition processTypeDefinition;
+    private final ProcessType processType;
 
     private final JsonNode errorPayload;
 
-    public MessageParser(ProcessTypeDefinition processTypeDefinition) {
+    public MessageParser(ProcessType processType) {
 
-        this.processTypeDefinition = processTypeDefinition;
+        this.processType = processType;
 
         this.objectMapper = new ObjectMapper();
 
@@ -38,26 +38,26 @@ public class MessageParser {
         this.errorPayload = error;
     }
 
-    public MessageDefinition createMessageFromJSON(String message) {
-        MessageDefinition messageDefinition = null;
+    public Message createMessageFromJSON(String message) {
+        Message messageDefinition = null;
         try {
             messageDefinition = objectMapper.readValue(
                     message,
-                    MessageDefinition.class
+                    Message.class
             );
         } catch (JsonProcessingException jsonExe) {
             ShellLogger.log("Error while parsing message: " + message + "\n" + jsonExe.getMessage());
-            messageDefinition = new MessageDefinition(
-                    MessageTypeDefinition.RESP,
-                    processTypeDefinition,
-                    OperationDefinition.UNKNOWN,
+            messageDefinition = new Message(
+                    MessageType.RESP,
+                    processType,
+                    Operation.UNKNOWN,
                     errorPayload
             );
             }
         return messageDefinition;
     }
 
-    public String createJSONFromMessage(MessageDefinition message) {
+    public String createJSONFromMessage(Message message) {
         String jsonMessage = "";
         try {
             jsonMessage = objectMapper.writeValueAsString(message);
@@ -67,10 +67,10 @@ public class MessageParser {
                     + jsonExe.getMessage()
             );
             try {
-                jsonMessage = objectMapper.writeValueAsString(new MessageDefinition(
-                        MessageTypeDefinition.ERR,
-                        processTypeDefinition,
-                        OperationDefinition.UNKNOWN,
+                jsonMessage = objectMapper.writeValueAsString(new Message(
+                        MessageType.ERR,
+                        processType,
+                        Operation.UNKNOWN,
                         errorPayload
                 ));
             } catch (JsonProcessingException ignored) {

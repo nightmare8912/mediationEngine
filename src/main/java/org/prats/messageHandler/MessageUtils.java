@@ -1,25 +1,25 @@
 package org.prats.messageHandler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.prats.definitions.MessageDefinition;
-import org.prats.definitions.MessageTypeDefinition;
-import org.prats.definitions.OperationDefinition;
-import org.prats.definitions.ProcessTypeDefinition;
+import org.prats.definitions.Message;
+import org.prats.definitions.MessageType;
+import org.prats.definitions.Operation;
+import org.prats.definitions.ProcessType;
 
 import java.util.UUID;
 
 
 public class MessageUtils {
-    public MessageDefinition createAcknowledgementMessage(
-            ProcessTypeDefinition processTypeDefinition,
-            MessageTypeDefinition messageTypeDefinition,
-            OperationDefinition operationDefinition,
+    public Message createAcknowledgementMessage(
+            ProcessType processType,
+            MessageType messageType,
+            Operation operation,
             UUID correlationID
     ) {
-        return new MessageDefinition (
-                messageTypeDefinition,
-                processTypeDefinition,
-                operationDefinition,
+        return new Message(
+                messageType,
+                processType,
+                operation,
                 new ObjectMapper().valueToTree("{}"),
                 correlationID
         );

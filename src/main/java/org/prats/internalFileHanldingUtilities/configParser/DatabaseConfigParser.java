@@ -2,8 +2,8 @@ package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import org.prats.definitions.DatabaseDefinition;
-import org.prats.definitions.DatabaseTableDefinition;
+import org.prats.definitions.Database;
+import org.prats.definitions.DatabaseTable;
 import org.prats.loggers.ShellLogger;
 
 import java.io.File;
@@ -19,10 +19,10 @@ public class DatabaseConfigParser {
         this.configFilePath = configFilePath;
     }
 
-    public DatabaseDefinition initializeDatabaseConfig() {
+    public Database initializeDatabaseConfig() {
         // declare the variables
-        DatabaseDefinition            databaseDefinition  = new DatabaseDefinition();
-        List<DatabaseTableDefinition> fieldDefinitionList = new ArrayList<>();
+        Database database = new Database();
+        List<DatabaseTable> fieldDefinitionList = new ArrayList<>();
 
         // open, read and parse the config file
         ShellLogger.log(configFilePath);
@@ -41,7 +41,7 @@ public class DatabaseConfigParser {
 
         for (Config table: tables)
         {
-            DatabaseTableDefinition fieldDefinition = new DatabaseTableDefinition();
+            DatabaseTable fieldDefinition = new DatabaseTable();
             fieldDefinition.setTableLabel(table.getString("label"));
             fieldDefinition.setTableId(table.getString("id"));
             fieldDefinition.setCreationSequence(table.getInt("creation_sequence"));
@@ -52,20 +52,20 @@ public class DatabaseConfigParser {
         }
 
         // set the fields of the tab and its name in the return value
-        databaseDefinition.setLabel(databaseLabel);
-        databaseDefinition.setId(databaseId);
-        databaseDefinition.setUrl(databaseUrl);
-        databaseDefinition.setUser(databaseUser);
-        databaseDefinition.setPass(databasePass);
-        databaseDefinition.setTimeout(databaseTimeout);
-        databaseDefinition.setIdleTimeout(databaseIdleTimeout);
-        databaseDefinition.setMaxConnections(databaseMaxConnections);
-        databaseDefinition.setTables(fieldDefinitionList);
+        database.setLabel(databaseLabel);
+        database.setId(databaseId);
+        database.setUrl(databaseUrl);
+        database.setUser(databaseUser);
+        database.setPass(databasePass);
+        database.setTimeout(databaseTimeout);
+        database.setIdleTimeout(databaseIdleTimeout);
+        database.setMaxConnections(databaseMaxConnections);
+        database.setTables(fieldDefinitionList);
 
-        return databaseDefinition;
+        return database;
     }
 
-    public DatabaseDefinition initializeDatabaseConfig(String configFilePath) {
+    public Database initializeDatabaseConfig(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeDatabaseConfig();

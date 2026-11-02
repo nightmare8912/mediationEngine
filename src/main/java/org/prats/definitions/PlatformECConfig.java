@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public class PlatformECConfigDefinition {
+public class PlatformECConfig {
     private String ecLabel;
     private String ecConfigPath;
 

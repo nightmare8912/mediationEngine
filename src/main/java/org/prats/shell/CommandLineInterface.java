@@ -1,9 +1,8 @@
 package org.prats.shell;
 
-import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
 import org.prats.internalFileHanldingUtilities.configParser.FilePathParser;
 import org.prats.database.h2Database.H2DatabaseEngine;
-import org.prats.definitions.FilePathDefinition;
+import org.prats.definitions.FilePath;
 import org.prats.database.h2Database.TableInitializer;
 import org.prats.internalFileHanldingUtilities.FileHandler;
 import org.prats.loggers.ShellLogger;
@@ -24,12 +23,12 @@ public class CommandLineInterface {
         platformInitializer = new PlatformInitializer();
     }
 
-    public void displayWelcomeMessage(FilePathDefinition filePathDefinition) {
-        ShellLogger.log(fileHandler.openAndRead(filePathDefinition.getWelcome()));
+    public void displayWelcomeMessage(FilePath filePath) {
+        ShellLogger.log(fileHandler.openAndRead(filePath.getWelcome()));
     }
 
-    public void displayHelpMessage(FilePathDefinition filePathDefinition) {
-        ShellLogger.log(fileHandler.openAndRead(filePathDefinition.getHelp()));
+    public void displayHelpMessage(FilePath filePath) {
+        ShellLogger.log(fileHandler.openAndRead(filePath.getHelp()));
     }
 
     public void displayCommandNotFoundMessage(String command) {
@@ -40,16 +39,16 @@ public class CommandLineInterface {
         System.out.println("Exiting...");
     }
 
-    public void createTablesFromConfig(FilePathDefinition filePathDefinition) {
+    public void createTablesFromConfig(FilePath filePath) {
         ShellLogger.log("Creating tables...");
-        new TableInitializer().initializeDatabase(filePathDefinition.getDatabaseConf());
+        new TableInitializer().initializeDatabase(filePath.getDatabaseConf());
     }
 
-    public void startPlatform(FilePathDefinition filePathDefinition) {
+    public void startPlatform(FilePath filePath) {
         ShellLogger.log("Starting platform...");
         try
         {
-            ShellLogger.log("" + platformInitializer.initializePlatform(new ArrayList<>(), filePathDefinition.getPlatformConf()).pid());
+            ShellLogger.log("" + platformInitializer.initializePlatform(new ArrayList<>(), filePath.getPlatformConf()).pid());
             ShellLogger.log("Started platform.");
         }
         catch (IOException ioe)
@@ -58,7 +57,7 @@ public class CommandLineInterface {
         }
     }
 
-    public void shutdownPlatform(FilePathDefinition filePathDefinition) {
+    public void shutdownPlatform(FilePath filePath) {
         int tcpPort;
 //        ShellLogger.log("Stopping platform...");
 //        try
@@ -80,30 +79,30 @@ public class CommandLineInterface {
 
     public void launch() {
 
-        FilePathDefinition filePathDefinition = new FilePathParser().initializeFilePaths("/Users/pratyush./Desktop/coding/mediationEngine2/src/main/resources/shell/allFilePath.conf");
+        FilePath filePath = new FilePathParser().initializeFilePaths("/Users/pratyush./Desktop/coding/mediationEngine2/src/main/resources/shell/allFilePath.conf");
         Scanner sc = new Scanner(System.in);
         String command = "";
 
-        displayWelcomeMessage(filePathDefinition);
+        displayWelcomeMessage(filePath);
 
         while (!command.equals("me kill"))
         {
             command = sc.nextLine();
             switch (command) {
-                case "meng help":                   displayHelpMessage(filePathDefinition);
+                case "meng help":                   displayHelpMessage(filePath);
                                                     break;
                 case "meng exit":                   displayExitMessage();
                                                     break;
-                case  "meng initialize h2db":       createTablesFromConfig(filePathDefinition);
+                case  "meng initialize h2db":       createTablesFromConfig(filePath);
                                                     break;
 
                 case "meng shutdown h2db":          shutdownH2Database();
                                                     break;
 
-                case "meng start platform":         startPlatform(filePathDefinition);
+                case "meng start platform":         startPlatform(filePath);
                                                     break;
 
-                case "meng shutdown platform":      shutdownPlatform(filePathDefinition);
+                case "meng shutdown platform":      shutdownPlatform(filePath);
                                                     break;
 
                 default:                            displayCommandNotFoundMessage(command);

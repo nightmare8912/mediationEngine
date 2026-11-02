@@ -1,10 +1,11 @@
 package org.prats.services.messageService;
 
+import org.prats.inputHandler.InputProcessor;
 import org.prats.messageHandler.MessageProcessor;
-import org.prats.definitions.ProcessTypeDefinition;
+import org.prats.definitions.ProcessType;
 import org.prats.messageHandler.ReplyChannel;
 import org.prats.services.Service;
-import org.prats.definitions.ClientConnectionDefinition;
+import org.prats.definitions.ClientConnection;
 import org.prats.messageHandler.MessageSender;
 import org.prats.threading.ThreadPool;
 import java.util.concurrent.ExecutorService;
@@ -13,21 +14,26 @@ import java.util.concurrent.ExecutorService;
 public class MessageService implements Service {
 
     private final ExecutorService threadPool;
-    private final MessageProcessor messageProcessor;
-    private final ProcessTypeDefinition process;
+//    private final MessageProcessor messageProcessor;
+    private final ProcessType process;
     private final MessageSender messageSender;
+    private final InputProcessor inputProcessor;
 
     public MessageService(
             int coreThreads,
             int maxThreads,
             long timeout,
-            ProcessTypeDefinition process,
+            ProcessType process,
             MessageSender messageSender
     ) {
-        this.messageProcessor = new MessageProcessor(
+        this.inputProcessor   = new InputProcessor(
                 process,
                 this
         );
+//        this.messageProcessor = new MessageProcessor(
+//                process,
+//                this
+//        );
         this.process          = process;
         this.messageSender    = messageSender;
         this.threadPool       = new ThreadPool().initializeAndGetThreadPool(
@@ -37,7 +43,7 @@ public class MessageService implements Service {
         );
     }
 
-    public ProcessTypeDefinition getProcess() {
+    public ProcessType getProcess() {
         return process;
     }
 
@@ -45,7 +51,7 @@ public class MessageService implements Service {
     // from here it is the responsibility of the message service to handle the message and deliver it to its intended recipient
     public void submitMessage(String message, ReplyChannel replyChannel) {
         threadPool.submit(
-                () -> messageProcessor.processMessage(
+                () -> inputProcessor.processInput(
                         message,
                         replyChannel
                 )
@@ -57,11 +63,11 @@ public class MessageService implements Service {
     // and the message service thread would return back to its pool
     public void sendMessage(
             String message,
-            ClientConnectionDefinition clientConnectionDefinition
+            ClientConnection clientConnection
     ) {
         messageSender.sendMessage(
                 message,
-                clientConnectionDefinition
+                clientConnection
         );
     }
 

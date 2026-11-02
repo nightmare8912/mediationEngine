@@ -2,9 +2,9 @@ package org.prats.definitions;
 
 import java.util.List;
 
-public class TabDefinition {
+public class Tab {
     private String label;
-    private List<TabFieldDefinition> fields;
+    private List<TabField> fields;
 
     public String getLabel() {
         return label;
@@ -14,11 +14,11 @@ public class TabDefinition {
         this.label = label;
     }
 
-    public List<TabFieldDefinition> getFields() {
+    public List<TabField> getFields() {
         return fields;
     }
 
-    public void setFields(List<TabFieldDefinition> fields) {
+    public void setFields(List<TabField> fields) {
         this.fields = fields;
     }
 }

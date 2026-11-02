@@ -2,7 +2,7 @@ package org.prats.definitions;
 
 import java.util.List;
 
-public class ECDefinition {
+public class EC {
     private String id;
     private String label;
     private int tcpPort;

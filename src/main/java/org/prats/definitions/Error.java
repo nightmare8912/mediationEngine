@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public class ErrorDefinition {
+public class Error {
     private String errorCode;
     private String errorMessage;
 

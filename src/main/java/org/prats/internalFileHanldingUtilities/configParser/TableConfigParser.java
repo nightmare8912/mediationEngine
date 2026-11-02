@@ -2,8 +2,8 @@ package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import org.prats.definitions.TableDefinition;
-import org.prats.definitions.TableFieldDefinition;
+import org.prats.definitions.Table;
+import org.prats.definitions.TableField;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -18,10 +18,10 @@ public class TableConfigParser {
         this.configFilePath = configFilePath;
     }
 
-    public TableDefinition initializeTableConfig() {
+    public Table initializeTableConfig() {
         // declare the variables
-        TableDefinition            tableDefinition     = new TableDefinition();
-        List<TableFieldDefinition> fieldDefinitionList = new ArrayList<>();
+        Table table = new Table();
+        List<TableField> fieldDefinitionList = new ArrayList<>();
 
         // open, read and parse the config file
         Config config = ConfigFactory.parseFile(new File(configFilePath));
@@ -33,7 +33,7 @@ public class TableConfigParser {
 
         for (Config field: fields)
         {
-            TableFieldDefinition fieldDefinition = new TableFieldDefinition();
+            TableField fieldDefinition = new TableField();
             fieldDefinition.setId(field.getString("id"));
             fieldDefinition.setLabel(field.getString("label"));
             fieldDefinition.setType(field.getString("type"));
@@ -46,15 +46,15 @@ public class TableConfigParser {
         }
 
         // set the fields of the tab and its name in the return value
-        tableDefinition.setLabel(tableLabel);
-        tableDefinition.setId(tableId);
-        tableDefinition.setFields(fieldDefinitionList);
-        tableDefinition.setNumberOfFields(fieldDefinitionList.size());
+        table.setLabel(tableLabel);
+        table.setId(tableId);
+        table.setFields(fieldDefinitionList);
+        table.setNumberOfFields(fieldDefinitionList.size());
 
-        return tableDefinition;
+        return table;
     }
 
-    public TableDefinition initializeTableConfig(String configFilePath) {
+    public Table initializeTableConfig(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeTableConfig();

@@ -1,26 +1,26 @@
 package org.prats.database.databaseUtilities.sqlHelper;
 
-import org.prats.definitions.TableDefinition;
-import org.prats.definitions.TableFieldDefinition;
+import org.prats.definitions.Table;
+import org.prats.definitions.TableField;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class SQLSyntaxHelper {
-    public String createTableStatementHelper(TableDefinition tableDefinition) {
+    public String createTableStatementHelper(Table table) {
         // empty sql
         StringBuilder sql = new StringBuilder();
         sql.append("CREATE TABLE IF NOT EXISTS ")
-                .append(tableDefinition.getId())
+                .append(table.getId())
                 .append(" (");
 
-        for (TableFieldDefinition tableFieldDefinition: tableDefinition.getFields())
+        for (TableField tableField : table.getFields())
         {
-            sql.append(tableFieldDefinition.getId())
+            sql.append(tableField.getId())
                     .append(" ")
-                    .append(tableFieldDefinition.getType());
+                    .append(tableField.getType());
 
-            if (tableFieldDefinition.getRequired())
+            if (tableField.getRequired())
                 sql.append(" NOT NULL");
 
             sql.append(", ");
@@ -28,7 +28,7 @@ public class SQLSyntaxHelper {
 
         List<String> primaryKeysList = new ArrayList<>();
 
-        for (TableFieldDefinition field : tableDefinition.getFields())
+        for (TableField field : table.getFields())
         {
             if (field.getPrimaryKey())
                 primaryKeysList.add(field.getId());
@@ -46,11 +46,11 @@ public class SQLSyntaxHelper {
         return sql.toString();
     }
 
-    private String dropTableStatementHelper(TableDefinition tableDefinition) {
+    private String dropTableStatementHelper(Table table) {
         // empty sql
         StringBuilder sql = new StringBuilder();
         sql.append("DROP TABLE IF EXISTS ")
-                .append(tableDefinition.getId());
+                .append(table.getId());
         return sql.toString();
     }
 }

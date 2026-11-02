@@ -1,10 +1,10 @@
 package org.prats.messageHandler;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import org.prats.definitions.MessageDefinition;
+import org.prats.definitions.Message;
 import org.prats.definitions.MessageEntity;
-import org.prats.definitions.MessageTypeDefinition;
-import org.prats.definitions.OperationDefinition;
+import org.prats.definitions.MessageType;
+import org.prats.definitions.Operation;
 
 public class MiscellaneousMessageHandler implements MessageHandler {
 
@@ -22,10 +22,10 @@ public class MiscellaneousMessageHandler implements MessageHandler {
     public void handleMessage(
             MessageEntity requestMessageEntity
     ) {
-        MessageDefinition responseMessage = messageUtils.createAcknowledgementMessage(
+        Message responseMessage = messageUtils.createAcknowledgementMessage(
                messageProcessor.getProcessTypeDefinition(),
-                MessageTypeDefinition.ACK,
-                OperationDefinition.UNKNOWN,
+                MessageType.ACK,
+                Operation.UNKNOWN,
                 requestMessageEntity.getMessageDefinition().getCorrelationId()
         );
         messageProcessor.sendMessage(

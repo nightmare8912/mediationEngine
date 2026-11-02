@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public enum ProcessTypeDefinition {
+public enum ProcessType {
     GUI,
     DATABASE,
     EC,

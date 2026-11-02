@@ -1,7 +1,7 @@
 package org.prats.platform;
 
 import org.prats.loggers.ShellLogger;
-import org.prats.definitions.ProcessTypeDefinition;
+import org.prats.definitions.ProcessType;
 import org.prats.services.databaseService.DatabaseService;
 import org.prats.services.messageService.MessageService;
 import org.prats.services.tcpService.TCPService;
@@ -92,7 +92,7 @@ public class Platform {
                 coreThreads,
                 maxThreads,
                 idleTimeout,
-                ProcessTypeDefinition.PLATFORM
+                ProcessType.PLATFORM
         );
 
         // the message service needs to hand back the message to tcp service once it is ready to respond, for the tcp service to write it back to the socket
@@ -100,7 +100,7 @@ public class Platform {
                 coreThreads,
                 maxThreads,
                 idleTimeout,
-                ProcessTypeDefinition.PLATFORM,
+                ProcessType.PLATFORM,
                 tcpService
         );
 

@@ -2,8 +2,8 @@ package org.prats.internalFileHanldingUtilities.configParser;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import org.prats.definitions.PlatformDefinition;
-import org.prats.definitions.PlatformECConfigDefinition;
+import org.prats.definitions.Platform;
+import org.prats.definitions.PlatformECConfig;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -18,10 +18,10 @@ public class PlatformConfigParser {
         this.configFilePath = configFilePath;
     }
 
-    public PlatformDefinition initializePlatformConfigs() {
+    public Platform initializePlatformConfigs() {
         // declare the variables
-        PlatformDefinition platformDefinition      = new PlatformDefinition();
-        List<PlatformECConfigDefinition> platformECConfigDefinitions = new ArrayList<>();
+        Platform platformDefinition      = new Platform();
+        List<PlatformECConfig> platformECConfigs = new ArrayList<>();
 
         // open, read and parse the config file
         Config config = ConfigFactory.parseFile(new File(configFilePath));
@@ -43,13 +43,13 @@ public class PlatformConfigParser {
 
         for (Config ecConfig : ecConfigList) {
 
-            PlatformECConfigDefinition definition =
-                    new PlatformECConfigDefinition();
+            PlatformECConfig definition =
+                    new PlatformECConfig();
 
             definition.setEcLabel(ecConfig.getString("id"));
             definition.setEcConfigPath(ecConfig.getString("path"));
 
-            platformECConfigDefinitions.add(definition);
+            platformECConfigs.add(definition);
         }
 
         // set the fields of the tab and its name in the return value
@@ -65,12 +65,12 @@ public class PlatformConfigParser {
         platformDefinition.setCoreIdleTimeout(platformCoreIdleTimeout);
         platformDefinition.setDatabaseConfig(platformDatabaseConf);
         platformDefinition.setJvmArgs(jvmArgs);
-        platformDefinition.setEcConfigs(platformECConfigDefinitions);
+        platformDefinition.setEcConfigs(platformECConfigs);
 
         return platformDefinition;
     }
 
-    public PlatformDefinition initializePlatformConfigs(String configFilePath) {
+    public Platform initializePlatformConfigs(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializePlatformConfigs();

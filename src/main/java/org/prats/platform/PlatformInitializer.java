@@ -1,7 +1,7 @@
 package org.prats.platform;
 
 import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
-import org.prats.definitions.PlatformDefinition;
+import org.prats.definitions.Platform;
 import org.prats.jvmLauncher.JVMLauncher;
 
 import java.io.IOException;
@@ -19,7 +19,7 @@ public class PlatformInitializer {
         List<String> platformAppArgs = new ArrayList<>();
 
         // parse the platform config file to java object
-        PlatformDefinition platformDefinition = new ConfigParser().initializePlatformConfigs(platformConfigFile);
+        Platform platformDefinition = new ConfigParser().initializePlatformConfigs(platformConfigFile);
 
         // populating the platform application params with platformDefinition
         platformAppArgs.add("--tcp-port=" + platformDefinition.getTcpPort());

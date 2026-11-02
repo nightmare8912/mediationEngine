@@ -1,18 +1,17 @@
 package org.prats.messageHandler;
 
-import org.prats.definitions.MessageDefinition;
-import org.prats.definitions.ClientConnectionDefinition;
+import org.prats.definitions.ClientConnection;
 import org.prats.services.tcpService.TCPService;
 
 public class TCPReplyChannel implements ReplyChannel{
-    public final ClientConnectionDefinition clientConnectionDefinition;
+    public final ClientConnection clientConnection;
     public final TCPService tcpService;
 
     public TCPReplyChannel(
-            ClientConnectionDefinition clientConnectionDefinition,
+            ClientConnection clientConnection,
             TCPService tcpService
     ) {
-        this.clientConnectionDefinition = clientConnectionDefinition;
+        this.clientConnection = clientConnection;
         this.tcpService                 = tcpService;
     }
 
@@ -20,7 +19,7 @@ public class TCPReplyChannel implements ReplyChannel{
     public void sendMessage(String message) {
         tcpService.sendMessage(
                 message,
-                clientConnectionDefinition
+                clientConnection
         );
     }
 }

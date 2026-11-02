@@ -1,9 +1,9 @@
 package org.prats.services.tcpService;
 
-import org.prats.definitions.ClientConnectionDefinition;
+import org.prats.definitions.ClientConnection;
 import org.prats.loggers.ShellLogger;
 import org.prats.messageHandler.MessageSender;
-import org.prats.definitions.ProcessTypeDefinition;
+import org.prats.definitions.ProcessType;
 import org.prats.messageHandler.ReplyChannel;
 import org.prats.messageHandler.TCPReplyChannel;
 import org.prats.services.Service;
@@ -27,7 +27,7 @@ public class TCPService implements Service, MessageSender {
 
     private final ExecutorService threadPool;
     private MessageService messageService;
-    private final ProcessTypeDefinition process;
+    private final ProcessType process;
 
     public TCPService (
             int tcpPort,
@@ -35,7 +35,7 @@ public class TCPService implements Service, MessageSender {
             int coreThreads,
             int maxThreads,
             int idleTimeout,
-            ProcessTypeDefinition process
+            ProcessType process
     ) {
         this.tcpPort            = tcpPort;
         this.tcpBacklogs        = tcpBacklogs;
@@ -92,9 +92,10 @@ public class TCPService implements Service, MessageSender {
 
     private void acceptClient(Socket clientSocket) {
         try {
-            // initialize client connection which we are going to use throughout the lifecycle of this connection to manage the communication with this client...
-            ClientConnectionDefinition connection =
-                    new ClientConnectionDefinition(clientSocket);
+            // initialize client connection which we are going to use throughout the lifecycle of this
+            // connection to manage the communication with this client...
+            ClientConnection connection =
+                    new ClientConnection(clientSocket);
             handleClient(connection);
         } catch (IOException ioe) {
             ShellLogger.log(ioe.getMessage());
@@ -110,14 +111,14 @@ public class TCPService implements Service, MessageSender {
     // the job of tcp thread is to just read the message and not process it end to end, that is the job of message service
     // so it would read it and pass it to the message service for it to handle... however, the tcp thread is stuck here
     // I will still like it to submit message to other threads,even though it effectively does nothing... as we would like segregation of roles
-    public void handleClient(ClientConnectionDefinition clientConnectionDefinition) {
+    public void handleClient(ClientConnection clientConnection) {
         // use the reply channel when responding
         ReplyChannel replyChannel = new TCPReplyChannel(
-                clientConnectionDefinition,
+                clientConnection,
                 this
         );
         try (
-                Socket socket         = clientConnectionDefinition.getSocket();
+                Socket socket         = clientConnection.getSocket();
                 BufferedReader reader = new BufferedReader(
                         new InputStreamReader(
                                 socket.getInputStream(),
@@ -139,23 +140,24 @@ public class TCPService implements Service, MessageSender {
     @Override
     public void sendMessage(
             String message,
-            ClientConnectionDefinition clientConnectionDefinition
+            ClientConnection clientConnection
     ) {
         threadPool.submit(() ->
                 writeMessageOnSocket(
                         message,
-                        clientConnectionDefinition
+                        clientConnection
                 )
         );
     }
 
-    // the tcp thread would write the message on the clientSocket so that client can read it, making it private otherwise, other function may accidentally call it and would now start to write message here, which we don't want
+    // the tcp thread would write the message on the clientSocket so that client can read it, making it private otherwise, other function
+    // may accidentally call it and would now start to write message here, which we don't want
     private void writeMessageOnSocket(
             String message,
-            ClientConnectionDefinition clientConnectionDefinition
+            ClientConnection clientConnection
     ) {
         try {
-            clientConnectionDefinition.sendMessage(message);
+            clientConnection.sendMessage(message);
         } catch (IOException ioe) {
             ShellLogger.log(ioe.getMessage());
         }

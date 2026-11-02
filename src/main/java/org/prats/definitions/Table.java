@@ -2,11 +2,11 @@ package org.prats.definitions;
 
 import java.util.List;
 
-public class TableDefinition {
+public class Table {
     private String label;
     private String id;
     private int numberOfFields;
-    List<TableFieldDefinition> fields;
+    List<TableField> fields;
 
     public int getNumberOfFields() {
         return numberOfFields;
@@ -32,11 +32,11 @@ public class TableDefinition {
         this.id = id;
     }
 
-    public List<TableFieldDefinition> getFields() {
+    public List<TableField> getFields() {
         return fields;
     }
 
-    public void setFields(List<TableFieldDefinition> fields) {
+    public void setFields(List<TableField> fields) {
         this.fields = fields;
     }
 }

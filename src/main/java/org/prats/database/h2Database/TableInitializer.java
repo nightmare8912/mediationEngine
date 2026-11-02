@@ -2,10 +2,10 @@ package org.prats.database.h2Database;
 
 import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
 import org.prats.database.databaseUtilities.sqlHelper.SQLSyntaxHelper;
-import org.prats.definitions.DatabaseDefinition;
-import org.prats.definitions.DatabaseTableDefinition;
-import org.prats.definitions.TableDefinition;
-import org.prats.definitions.TableFieldDefinition;
+import org.prats.definitions.Database;
+import org.prats.definitions.DatabaseTable;
+import org.prats.definitions.Table;
+import org.prats.definitions.TableField;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -22,17 +22,17 @@ public class TableInitializer {
         this.databaseConfigFile = databaseConfigFile;
     }
 
-    private StringBuilder validateTable(TableDefinition tableDefinition) {
+    private StringBuilder validateTable(Table table) {
         boolean isError = false;
         StringBuilder errorMessage = new StringBuilder();
 
-        if (tableDefinition.getLabel() == null || tableDefinition.getId().isEmpty())
+        if (table.getLabel() == null || table.getId().isEmpty())
         {
             errorMessage.append("Table ID is empty in file ");
             isError = true;
         }
 
-        if (!isError && tableDefinition.getNumberOfFields() == 0)
+        if (!isError && table.getNumberOfFields() == 0)
         {
             errorMessage.append("No fields in the table");
             isError = true;
@@ -40,16 +40,16 @@ public class TableInitializer {
 
         if (!isError)
         {
-            for (TableFieldDefinition tableFieldDefinition : tableDefinition.getFields())
+            for (TableField tableField : table.getFields())
             {
-                if (tableFieldDefinition.getId() == null || tableFieldDefinition.getId().isEmpty())
+                if (tableField.getId() == null || tableField.getId().isEmpty())
                 {
                     errorMessage.append("Field name empty in table ");
                     isError = true; break;
                 }
-                if (tableFieldDefinition.getType() == null || tableFieldDefinition.getType().equals(""))
+                if (tableField.getType() == null || tableField.getType().equals(""))
                 {
-                    errorMessage.append("Field type empty for field "); errorMessage.append(tableFieldDefinition.getId());
+                    errorMessage.append("Field type empty for field "); errorMessage.append(tableField.getId());
                     isError = true; break;
                 }
             }
@@ -59,14 +59,14 @@ public class TableInitializer {
     }
 
 
-    private StringBuilder createTable(Connection connection, TableDefinition tableDefinition) throws SQLException {
+    private StringBuilder createTable(Connection connection, Table table) throws SQLException {
 
         SQLSyntaxHelper sqlSyntaxHelper = new SQLSyntaxHelper();
-        StringBuilder errorMessage      = validateTable(tableDefinition);
+        StringBuilder errorMessage      = validateTable(table);
 
         if (errorMessage.isEmpty())
         {
-            String sql = sqlSyntaxHelper.createTableStatementHelper(tableDefinition);
+            String sql = sqlSyntaxHelper.createTableStatementHelper(table);
             System.out.println(sql);
             try (Statement statement = connection.createStatement())
             {
@@ -85,12 +85,12 @@ public class TableInitializer {
     public void initializeDatabase() {
         StringBuilder errorMessage;
         ConfigParser configParser = new ConfigParser();
-        DatabaseDefinition databaseDefinition = configParser.initializeDatabaseConfig(databaseConfigFile);
+        Database database = configParser.initializeDatabaseConfig(databaseConfigFile);
 
-        databaseDefinition.getTables().sort(
-                new Comparator<DatabaseTableDefinition>() {
+        database.getTables().sort(
+                new Comparator<DatabaseTable>() {
                     @Override
-                    public int compare(DatabaseTableDefinition o1, DatabaseTableDefinition o2) {
+                    public int compare(DatabaseTable o1, DatabaseTable o2) {
                         return Integer.compare(
                                 o1.getCreationSequence(),
                                 o2.getCreationSequence()
@@ -100,15 +100,15 @@ public class TableInitializer {
         );
 
         H2DatabaseEngine.initialize(
-                databaseDefinition.getUrl(),
-                databaseDefinition.getUser(),
-                databaseDefinition.getPass(),
-                databaseDefinition.getTimeout(),
-                databaseDefinition.getIdleTimeout(),
-                databaseDefinition.getMaxConnections()
+                database.getUrl(),
+                database.getUser(),
+                database.getPass(),
+                database.getTimeout(),
+                database.getIdleTimeout(),
+                database.getMaxConnections()
         );
 
-        for (DatabaseTableDefinition table: databaseDefinition.getTables()) {
+        for (DatabaseTable table: database.getTables()) {
             try (Connection connection = H2DatabaseEngine.getConnection())
             {
                 System.out.println("Creating table: " + table.getTableId());

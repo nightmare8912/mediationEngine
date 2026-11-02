@@ -12,11 +12,11 @@ public class ConfigParser {
         this.configFilePath = configFilePath;
     }
 
-    public TabDefinition initializeTabConfigs() {
+    public Tab initializeTabConfigs() {
         return new TabConfigParser().initializeTabConfigs(configFilePath);
     }
 
-    public TabDefinition initializeTabConfigs(String configFilePath) {
+    public Tab initializeTabConfigs(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeTabConfigs();
@@ -33,51 +33,51 @@ public class ConfigParser {
         initializeAgentConfig();
     }
 
-    public TableDefinition initializeTableConfig() {
+    public Table initializeTableConfig() {
         return new TableConfigParser().initializeTableConfig(configFilePath);
     }
 
-    public TableDefinition initializeTableConfig(String configFilePath) {
+    public Table initializeTableConfig(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeTableConfig();
     }
 
-    public DatabaseDefinition initializeDatabaseConfig() {
+    public Database initializeDatabaseConfig() {
        return new DatabaseConfigParser().initializeDatabaseConfig(configFilePath);
     }
 
-    public DatabaseDefinition initializeDatabaseConfig(String configFilePath) {
+    public Database initializeDatabaseConfig(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeDatabaseConfig();
     }
 
-    public FilePathDefinition initializeFilePaths() {
+    public FilePath initializeFilePaths() {
         return new FilePathParser().initializeFilePaths(configFilePath);
     }
 
-    public FilePathDefinition initializeFilePaths(String configFilePath) {
+    public FilePath initializeFilePaths(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeFilePaths();
     }
 
-    public ECDefinition initializeECConfigs() {
+    public EC initializeECConfigs() {
         return new ECConfigParser().initializeECConfigs(configFilePath);
     }
 
-    public ECDefinition initializeECConfigs(String configFilePath) {
+    public EC initializeECConfigs(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializeECConfigs();
     }
 
-    public PlatformDefinition initializePlatformConfigs() {
+    public Platform initializePlatformConfigs() {
         return new PlatformConfigParser().initializePlatformConfigs(configFilePath);
     }
 
-    public PlatformDefinition initializePlatformConfigs(String configFilePath) {
+    public Platform initializePlatformConfigs(String configFilePath) {
         // set the config path
         this.configFilePath = configFilePath;
         return initializePlatformConfigs();

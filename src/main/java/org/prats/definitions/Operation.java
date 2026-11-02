@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-public enum OperationDefinition {
+public enum Operation {
     FETCH,
     SEARCH,
 
