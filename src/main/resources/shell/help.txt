@@ -19,3 +19,5 @@ Here is a list of commands that you can use, with its purpose:
 
     6. meng shutdown h2db
         Shuts down the connection pool of the internal database
+    7. meng start platform
+        Starts the platform on its configured TCP port

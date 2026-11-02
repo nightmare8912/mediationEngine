@@ -1,5 +1,6 @@
 package org.prats.shell;
 
+import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
 import org.prats.internalFileHanldingUtilities.configParser.FilePathParser;
 import org.prats.database.h2Database.H2DatabaseEngine;
 import org.prats.definitions.FilePathDefinition;
@@ -57,6 +58,20 @@ public class CommandLineInterface {
         }
     }
 
+    public void shutdownPlatform(FilePathDefinition filePathDefinition) {
+        int tcpPort;
+//        ShellLogger.log("Stopping platform...");
+//        try
+//        {
+//            tcpPort = new ConfigParser().initializePlatformConfigs(filePathDefinition.getPlatformConf()).getTcpPort();
+//            ShellLogger.log("Stopped platform.");
+//        }
+//        catch (IOException ioe)
+//        {
+//            ShellLogger.log("Unable to start platform..." + Arrays.toString(ioe.getStackTrace()));
+//        }
+    }
+
     public void shutdownH2Database() {
         ShellLogger.log("Shutting down H2 database...");
         H2DatabaseEngine.shutdown();
@@ -86,6 +101,9 @@ public class CommandLineInterface {
                                                     break;
 
                 case "meng start platform":         startPlatform(filePathDefinition);
+                                                    break;
+
+                case "meng shutdown platform":      shutdownPlatform(filePathDefinition);
                                                     break;
 
                 default:                            displayCommandNotFoundMessage(command);

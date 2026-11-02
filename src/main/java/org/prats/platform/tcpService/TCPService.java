@@ -1,6 +1,8 @@
 package org.prats.platform.tcpService;
 
+import org.prats.loggers.ShellLogger;
 import org.prats.messageHandler.MessageProcessor;
+import org.prats.messageHandler.MessageSender;
 import org.prats.messageHandler.MessageSource;
 import org.prats.platform.Service;
 import org.prats.platform.messageService.MessageService;
@@ -14,7 +16,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 
-public class TCPService implements Service {
+public class TCPService implements Service, MessageSender {
 
     private final int tcpPort;
     private final int tcpBacklogs;
@@ -24,9 +26,8 @@ public class TCPService implements Service {
 
     private final ExecutorService threadPool;
     private final MessageProcessor messageProcessor;
-    private final MessageService messageService;
+    private MessageService messageService;
     private final MessageSource process;
-    private volatile Map<Integer, Socket> tcpPortToSocketMap;
 
     public TCPService (
             int tcpPort,
@@ -34,20 +35,21 @@ public class TCPService implements Service {
             int coreThreads,
             int maxThreads,
             int idleTimeout,
-            MessageSource process,
-            MessageService messageService
+            MessageSource process
     ) {
         this.tcpPort            = tcpPort;
         this.tcpBacklogs        = tcpBacklogs;
         this.process            = process;
         messageProcessor        = new MessageProcessor(process);
-        this.messageService     = messageService;
         threadPool = new ThreadPool().initializeAndGetThreadPool(
                 coreThreads,
                 maxThreads,
                 idleTimeout
         );
-        tcpPortToSocketMap      = new HashMap<>();
+    }
+
+    public void setMessageService(MessageService messageService) {
+        this.messageService = messageService;
     }
 
     @Override
@@ -124,12 +126,16 @@ public class TCPService implements Service {
         }
     }
 
+    @Override
     public void sendMessage(
             String message,
             ClientConnection clientConnection
     ) {
-        // sends the message on tcp
-
+        try {
+            clientConnection.sendMessage(message);
+        } catch (IOException ioe) {
+            ShellLogger.log(ioe.getMessage());
+        }
     }
 
     @Override

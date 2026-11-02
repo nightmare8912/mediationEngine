@@ -1,5 +1,6 @@
 package org.prats.platform;
 
+import org.prats.loggers.ShellLogger;
 import org.prats.messageHandler.MessageSource;
 import org.prats.platform.databaseService.DatabaseService;
 import org.prats.platform.messageService.MessageService;
@@ -70,24 +71,42 @@ public class Platform {
     }
 
     public void startServices() {
-        databaseService = (DatabaseService) new DatabaseService().startService(
+        databaseService = (DatabaseService) new DatabaseService(
                 databaseConfigFile
         );
-        messageService  = (MessageService) new MessageService(
-                coreThreads,
-                maxThreads,
-                idleTimeout,
-                MessageSource.PLATFORM
-        ).startService();
-        tcpService      = (TCPService) new TCPService(
+
+        tcpService = new TCPService(
                 tcpPort,
                 tcpBacklog,
                 coreThreads,
                 maxThreads,
                 idleTimeout,
+                MessageSource.PLATFORM
+        );
+        messageService = new MessageService(
+                coreThreads,
+                maxThreads,
+                idleTimeout,
                 MessageSource.PLATFORM,
-                messageService
-        ).startService();
+                tcpService
+        );
+        tcpService.setMessageService(messageService);
+
+        databaseService.startService();
+        messageService.startService();
+        tcpService.startService();
+    }
+
+    public static void shutdownServices() {
+        databaseService.shutdownService();
+        messageService.shutdownService();
+        tcpService.shutdownService();
+    }
+
+    public static void  shutdown() {
+        shutdownServices();
+        ShellLogger.log("Killing the platform...");
+        System.exit(0);
     }
 
     public static void main(String[] args) throws IllegalArgumentException, IOException {

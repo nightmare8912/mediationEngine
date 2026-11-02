@@ -5,9 +5,8 @@ import org.prats.messageHandler.MessageProcessor;
 import org.prats.messageHandler.MessageSource;
 import org.prats.platform.Service;
 import org.prats.platform.tcpService.ClientConnection;
+import org.prats.messageHandler.MessageSender;
 import org.prats.threading.ThreadPool;
-
-import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 
 
@@ -16,15 +15,18 @@ public class MessageService implements Service {
     private final ExecutorService threadPool;
     private final MessageProcessor messageProcessor;
     private final MessageSource process;
+    private final MessageSender messageSender;
 
     public MessageService(
             int coreThreads,
             int maxThreads,
             long timeout,
-            MessageSource process
+            MessageSource process,
+            MessageSender messageSender
     ) {
         this.messageProcessor = new MessageProcessor(process);
         this.process          = process;
+        this.messageSender    = messageSender;
         this.threadPool       = new ThreadPool().initializeAndGetThreadPool(
                 coreThreads,
                 maxThreads,
@@ -42,6 +44,10 @@ public class MessageService implements Service {
                     }
                 }
         );
+    }
+
+    public void sendMessage(String message, ClientConnection clientConnection) {
+        messageSender.sendMessage(message, clientConnection);
     }
 
     @Override
