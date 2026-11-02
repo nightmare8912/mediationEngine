@@ -128,7 +128,10 @@ public class TCPService implements Service, MessageSender {
         ) {
             String message;
             while ((message = reader.readLine()) != null) {
-                messageService.submitMessage(message, replyChannel);
+                messageService.submitMessage(
+                        message,
+                        replyChannel
+                );
             }
         } catch (IOException ioe) {
             ShellLogger.log(ioe.getMessage());

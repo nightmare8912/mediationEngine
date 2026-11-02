@@ -48,8 +48,8 @@ public class MessageParser {
         } catch (JsonProcessingException jsonExe) {
             ShellLogger.log("Error while parsing message: " + message + "\n" + jsonExe.getMessage());
             messageDefinition = new Message(
-                    MessageType.RESP,
-                    processType,
+                    MessageType.UNKNOWN,
+                    ProcessType.UNKNOWN,
                     Operation.UNKNOWN,
                     errorPayload
             );
@@ -68,7 +68,7 @@ public class MessageParser {
             );
             try {
                 jsonMessage = objectMapper.writeValueAsString(new Message(
-                        MessageType.ERR,
+                        MessageType.UNKNOWN,
                         processType,
                         Operation.UNKNOWN,
                         errorPayload
