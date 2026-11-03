@@ -2,6 +2,8 @@ package org.prats.platform;
 
 import org.prats.loggers.ShellLogger;
 import org.prats.definitions.ProcessType;
+import org.prats.services.PlatformServiceRegistry;
+import org.prats.services.ServiceRegistry;
 import org.prats.services.databaseService.DatabaseService;
 import org.prats.services.messageService.MessageService;
 import org.prats.services.tcpService.TCPService;
@@ -22,6 +24,7 @@ public class Platform {
     private static DatabaseService databaseService;
     private static MessageService messageService;
     private static TCPService tcpService;
+    private static ServiceRegistry serviceRegistry;
 
     public Platform() { this.containerProcess = new ArrayList<>(); }
 
@@ -83,8 +86,13 @@ public class Platform {
     // this is messy to wrap my head around, but messy is good?
     public void startServices() {
         databaseService = new DatabaseService(
+                coreThreads,
+                maxThreads,
+                idleTimeout,
+                ProcessType.PLATFORM,
                 databaseConfigFile
         );
+
         // the tcp service would hand over message to message service for it to take care
         tcpService = new TCPService(
                 tcpPort,
@@ -104,13 +112,21 @@ public class Platform {
                 tcpService
         );
 
+        serviceRegistry = new PlatformServiceRegistry();
+
         // once initializing the message service, we need to pass a reference of it to the tcp service so that it can pass the message to it
         tcpService.setMessageService(messageService);
+        messageService.setServiceRegistry(serviceRegistry);
+
+        serviceRegistry.registerService(databaseService);
+        serviceRegistry.registerService(messageService);
+        serviceRegistry.registerService(tcpService);
 
         // starting all the services
         databaseService.startService();
         messageService.startService();
         tcpService.startService();
+
     }
 
     // shuts down all the services

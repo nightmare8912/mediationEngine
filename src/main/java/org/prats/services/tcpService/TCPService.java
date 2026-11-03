@@ -1,11 +1,13 @@
 package org.prats.services.tcpService;
 
 import org.prats.definitions.ClientConnection;
+import org.prats.definitions.MessageEntity;
+import org.prats.inputHandler.utils.MessageParser;
 import org.prats.loggers.ShellLogger;
-import org.prats.messageHandler.MessageSender;
+import org.prats.inputHandler.utils.MessageSender;
 import org.prats.definitions.ProcessType;
-import org.prats.messageHandler.ReplyChannel;
-import org.prats.messageHandler.TCPReplyChannel;
+import org.prats.inputHandler.utils.replyUtils.ReplyChannel;
+import org.prats.inputHandler.utils.replyUtils.TCPReplyChannel;
 import org.prats.services.Service;
 import org.prats.services.messageService.MessageService;
 import org.prats.threading.ThreadPool;
@@ -28,6 +30,8 @@ public class TCPService implements Service, MessageSender {
     private final ExecutorService threadPool;
     private MessageService messageService;
     private final ProcessType process;
+    private final String serviceName;
+    private final MessageParser messageParser;
 
     public TCPService (
             int tcpPort,
@@ -37,9 +41,11 @@ public class TCPService implements Service, MessageSender {
             int idleTimeout,
             ProcessType process
     ) {
+        this.serviceName        = this.getClass().getSimpleName();
         this.tcpPort            = tcpPort;
         this.tcpBacklogs        = tcpBacklogs;
         this.process            = process;
+        this.messageParser      = new MessageParser(process);
         threadPool = new ThreadPool().initializeAndGetThreadPool(
                 coreThreads,
                 maxThreads,
@@ -128,9 +134,12 @@ public class TCPService implements Service, MessageSender {
         ) {
             String message;
             while ((message = reader.readLine()) != null) {
-                messageService.submitMessage(
-                        message,
-                        replyChannel
+                messageService.submit(
+                        new MessageEntity(
+                                messageParser.createMessageFromJSON(message),
+                                replyChannel,
+                                message
+                        )
                 );
             }
         } catch (IOException ioe) {
@@ -169,5 +178,15 @@ public class TCPService implements Service, MessageSender {
     @Override
     public void shutdownService() {
         threadPool.shutdown();
+    }
+
+    @Override
+    public String getServiceName() {
+        return serviceName;
+    }
+
+    @Override
+    public void submit(MessageEntity messageEntity) {
+        // cannot think of anything for now
     }
 }

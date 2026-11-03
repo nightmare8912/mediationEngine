@@ -11,16 +11,16 @@ public class SQLSyntaxHelper {
         // empty sql
         StringBuilder sql = new StringBuilder();
         sql.append("CREATE TABLE IF NOT EXISTS ")
-                .append(table.getId())
+                .append(table.id())
                 .append(" (");
 
-        for (TableField tableField : table.getFields())
+        for (TableField tableField : table.fields())
         {
-            sql.append(tableField.getId())
+            sql.append(tableField.id())
                     .append(" ")
-                    .append(tableField.getType());
+                    .append(tableField.type());
 
-            if (tableField.getRequired())
+            if (tableField.required())
                 sql.append(" NOT NULL");
 
             sql.append(", ");
@@ -28,10 +28,10 @@ public class SQLSyntaxHelper {
 
         List<String> primaryKeysList = new ArrayList<>();
 
-        for (TableField field : table.getFields())
+        for (TableField field : table.fields())
         {
-            if (field.getPrimaryKey())
-                primaryKeysList.add(field.getId());
+            if (field.primaryKey())
+                primaryKeysList.add(field.id());
         }
 
         if (!primaryKeysList.isEmpty())
@@ -50,7 +50,7 @@ public class SQLSyntaxHelper {
         // empty sql
         StringBuilder sql = new StringBuilder();
         sql.append("DROP TABLE IF EXISTS ")
-                .append(table.getId());
+                .append(table.id());
         return sql.toString();
     }
 }

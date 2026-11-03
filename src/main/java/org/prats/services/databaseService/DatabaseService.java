@@ -1,62 +1,80 @@
 package org.prats.services.databaseService;
 
 import com.zaxxer.hikari.HikariDataSource;
-import org.prats.database.h2Database.H2DatabaseEngine;
-import org.prats.definitions.Database;
-import org.prats.internalFileHanldingUtilities.configParser.ConfigParser;
-import org.prats.loggers.ShellLogger;
+import org.prats.database.h2Database.H2DatabaseInitializer;
+import org.prats.definitions.MessageEntity;
+import org.prats.definitions.ProcessType;
+import org.prats.inputHandler.handlers.DatabaseMessageHandler;
 import org.prats.services.Service;
+import org.prats.services.messageService.MessageService;
+import org.prats.threading.ThreadPool;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class DatabaseService implements Service {
-    private String databaseConfigFile;
-    private static HikariDataSource dataSource;
 
-    public DatabaseService() {}
-    public DatabaseService(String databaseConfigFile) { this.databaseConfigFile = databaseConfigFile; }
+    private HikariDataSource dataSource;
+    private H2DatabaseInitializer databaseInitializer;
+    private MessageService messageService;
+    private final ProcessType process;
+    private ExecutorService threadPool;
+    private final DatabaseMessageHandler databaseMessageHandler;
+    private final String serviceName;
+
+    public DatabaseService(
+            int coreThreads,
+            int maxThreads,
+            int idleTimeout,
+            ProcessType process,
+            String databaseConfigFile
+    ) {
+        this.serviceName            = this.getClass().getSimpleName();
+        this.databaseInitializer    = new H2DatabaseInitializer(databaseConfigFile);
+        this.databaseMessageHandler = new DatabaseMessageHandler();
+        this.process                = process;
+        threadPool                  = new ThreadPool().initializeAndGetThreadPool(
+                coreThreads,
+                maxThreads,
+                idleTimeout
+        );
+    }
 
     @Override
     public Service startService() {
-        // use the config parser
-        ShellLogger.log("");
-        Database database = new ConfigParser().initializeDatabaseConfig(databaseConfigFile);
-
-        // initialize the connection pool and the database
-        H2DatabaseEngine.initialize(
-                database.getUrl(),
-                database.getUser(),
-                database.getPass(),
-                database.getTimeout(),
-                database.getIdleTimeout(),
-                database.getMaxConnections()
-        );
-
-        // get the static reference of database connection pool
-        dataSource = H2DatabaseEngine.getDataSource();
+        databaseInitializer.initializeH2Database();
+        dataSource = databaseInitializer.getH2DBConnectionPool();
         return this;
     }
 
-//    public int executeUpdate(String sql) {
-//        try (
-//                Connection connection = dataSource.getConnection();
-//                Statement statement   = connection.createStatement();
-//        ) {
-//            statement.executeUpdate(sql);
-//        } catch (SQLException sqlException) {
-//
-//        }
-//    }
+    @Override
+    public String getServiceName() {
+        return serviceName;
+    }
 
-//    public ResultSet executeQuery(String sql) {
-//
-//    }
-
-    public Service startService(String databaseConfigFile) {
-        this.databaseConfigFile = databaseConfigFile;
-        return startService();
+    // calling thread (message service) can submit the call to db thread and return to its pool
+    @Override
+    public void submit(MessageEntity messageEntity) {
+        threadPool.submit(
+                () -> databaseMessageHandler.handleMessage(messageEntity)
+        );
     }
 
     @Override
     public void shutdownService() {
-        H2DatabaseEngine.shutdown();
+
+        threadPool.shutdown();
+
+        try {
+            if (!threadPool.awaitTermination(30, TimeUnit.SECONDS)) {
+                threadPool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            threadPool.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        dataSource.close();
     }
+
 }

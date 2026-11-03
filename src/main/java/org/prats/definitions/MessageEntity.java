@@ -1,24 +1,27 @@
 package org.prats.definitions;
 
-import org.prats.messageHandler.ReplyChannel;
+import org.prats.inputHandler.utils.replyUtils.ReplyChannel;
 
 public class MessageEntity {
     private Message message;
-    private ReplyChannel      replyChannel;
+    private ReplyChannel replyChannel;
+    private String originalMessage;
 
     public MessageEntity(
             Message message,
-            ReplyChannel replyChannel
+            ReplyChannel replyChannel,
+            String originalMessage
     ) {
-        this.message = message;
+        this.message            = message;
         this.replyChannel       = replyChannel;
+        this.originalMessage    = originalMessage;
     }
 
-    public Message getMessageDefinition() {
+    public Message getMessage() {
         return message;
     }
 
-    public void setMessageDefinition(Message message) {
+    public void setMessage(Message message) {
         this.message = message;
     }
 
@@ -28,5 +31,13 @@ public class MessageEntity {
 
     public void setReplyChannel(ReplyChannel replyChannel) {
         this.replyChannel = replyChannel;
+    }
+
+    public String getOriginalMessage() {
+        return originalMessage;
+    }
+
+    public void setOriginalMessage(String originalMessage) {
+        this.originalMessage = originalMessage;
     }
 }

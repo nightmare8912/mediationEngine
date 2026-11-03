@@ -1,6 +1,11 @@
 package org.prats.services;
 
+import org.prats.definitions.MessageEntity;
+import org.prats.inputHandler.utils.replyUtils.ReplyChannel;
+
 public interface Service {
-    public Service startService();
-    public void shutdownService();
+    Service startService();
+    void shutdownService();
+    String getServiceName();
+    void submit(MessageEntity messageEntity);
 }

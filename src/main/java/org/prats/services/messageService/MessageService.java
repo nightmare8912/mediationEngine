@@ -1,12 +1,11 @@
 package org.prats.services.messageService;
 
-import org.prats.inputHandler.InputProcessor;
-import org.prats.messageHandler.MessageProcessor;
+import org.prats.definitions.MessageEntity;
+import org.prats.inputHandler.processors.InputProcessor;
 import org.prats.definitions.ProcessType;
-import org.prats.messageHandler.ReplyChannel;
 import org.prats.services.Service;
-import org.prats.definitions.ClientConnection;
-import org.prats.messageHandler.MessageSender;
+import org.prats.inputHandler.utils.MessageSender;
+import org.prats.services.ServiceRegistry;
 import org.prats.threading.ThreadPool;
 import java.util.concurrent.ExecutorService;
 
@@ -18,6 +17,8 @@ public class MessageService implements Service {
     private final ProcessType process;
     private final MessageSender messageSender;
     private final InputProcessor inputProcessor;
+    private final String serviceName;
+    private ServiceRegistry serviceRegistry;
 
     public MessageService(
             int coreThreads,
@@ -26,9 +27,11 @@ public class MessageService implements Service {
             ProcessType process,
             MessageSender messageSender
     ) {
-        this.inputProcessor   = new InputProcessor(
+        this.serviceName        = this.getClass().getSimpleName();
+        this.inputProcessor     = new InputProcessor(
                 process,
-                this
+                this,
+                serviceRegistry
         );
 //        this.messageProcessor = new MessageProcessor(
 //                process,
@@ -43,33 +46,35 @@ public class MessageService implements Service {
         );
     }
 
+    public void setServiceRegistry(ServiceRegistry serviceRegistry) {
+        this.serviceRegistry = serviceRegistry;
+    }
+
     public ProcessType getProcess() {
         return process;
     }
 
     // this is where the message service would take over the message and let the thread which brought this message go back
     // from here it is the responsibility of the message service to handle the message and deliver it to its intended recipient
-    public void submitMessage(String message, ReplyChannel replyChannel) {
+    @Override
+    public void submit(MessageEntity messageEntity) {
         threadPool.submit(
-                () -> inputProcessor.processInput(
-                        message,
-                        replyChannel
-                )
+                () -> inputProcessor.processInput(messageEntity)
         );
     }
 
-    // this is message service way to send a message, the message sender here is the tcp service which would write the message on the tcp socket
-    // its not the message service, who writes, the message service thread is just responsible to hand it over to the tcp service for it to write
-    // and the message service thread would return back to its pool
-    public void sendMessage(
-            String message,
-            ClientConnection clientConnection
-    ) {
-        messageSender.sendMessage(
-                message,
-                clientConnection
-        );
-    }
+//     this is message service way to send a message, the message sender here is the tcp service which would write the message on the tcp socket
+//     its not the message service, who writes, the message service thread is just responsible to hand it over to the tcp service for it to write
+//     and the message service thread would return back to its pool
+//    public void sendMessage(
+//            String message,
+//            ClientConnection clientConnection
+//    ) {
+//        messageSender.sendMessage(
+//                message,
+//                clientConnection
+//        );
+//    }
 
     @Override
     public Service startService() {
@@ -79,5 +84,10 @@ public class MessageService implements Service {
     @Override
     public void shutdownService() {
         threadPool.shutdown();
+    }
+
+    @Override
+    public String getServiceName() {
+        return serviceName;
     }
 }

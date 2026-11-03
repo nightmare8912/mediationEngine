@@ -1,6 +1,6 @@
 package org.prats.definitions;
 
-import org.prats.messageHandler.ReplyChannel;
+import org.prats.inputHandler.utils.replyUtils.ReplyChannel;
 
 public class CommandEntity {
 

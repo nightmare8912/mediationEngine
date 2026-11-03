@@ -1,10 +1,10 @@
 package org.prats.shell;
 
-import org.prats.internalFileHanldingUtilities.configParser.FilePathParser;
-import org.prats.database.h2Database.H2DatabaseEngine;
+import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool;
+import org.prats.fileHanldingUtilities.configParser.FilePathParser;
 import org.prats.definitions.FilePath;
-import org.prats.database.h2Database.TableInitializer;
-import org.prats.internalFileHanldingUtilities.FileHandler;
+import org.prats.database.h2Database.H2TableInitializer;
+import org.prats.fileHanldingUtilities.FileHandler;
 import org.prats.loggers.ShellLogger;
 import org.prats.platform.PlatformInitializer;
 
@@ -17,18 +17,20 @@ public class CommandLineInterface {
 
     private FileHandler fileHandler;
     private PlatformInitializer platformInitializer;
+    private final HikariDBConnectionPool dbConnectionPool;
 
     public CommandLineInterface() {
-        fileHandler = new FileHandler();
+        fileHandler         = new FileHandler();
         platformInitializer = new PlatformInitializer();
+        dbConnectionPool    = new HikariDBConnectionPool();
     }
 
     public void displayWelcomeMessage(FilePath filePath) {
-        ShellLogger.log(fileHandler.openAndRead(filePath.getWelcome()));
+        ShellLogger.log(fileHandler.openAndRead(filePath.welcome()));
     }
 
     public void displayHelpMessage(FilePath filePath) {
-        ShellLogger.log(fileHandler.openAndRead(filePath.getHelp()));
+        ShellLogger.log(fileHandler.openAndRead(filePath.help()));
     }
 
     public void displayCommandNotFoundMessage(String command) {
@@ -41,14 +43,14 @@ public class CommandLineInterface {
 
     public void createTablesFromConfig(FilePath filePath) {
         ShellLogger.log("Creating tables...");
-        new TableInitializer().initializeDatabase(filePath.getDatabaseConf());
+        new H2TableInitializer().initializeDatabase(filePath.databaseConf());
     }
 
     public void startPlatform(FilePath filePath) {
         ShellLogger.log("Starting platform...");
         try
         {
-            ShellLogger.log("" + platformInitializer.initializePlatform(new ArrayList<>(), filePath.getPlatformConf()).pid());
+            ShellLogger.log("" + platformInitializer.initializePlatform(new ArrayList<>(), filePath.platformConf()).pid());
             ShellLogger.log("Started platform.");
         }
         catch (IOException ioe)
@@ -73,7 +75,7 @@ public class CommandLineInterface {
 
     public void shutdownH2Database() {
         ShellLogger.log("Shutting down H2 database...");
-        H2DatabaseEngine.shutdown();
+        dbConnectionPool.shutdown();
         ShellLogger.log("Killed H2 database...");
     }
 

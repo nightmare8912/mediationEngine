@@ -3,7 +3,7 @@ package org.prats.database.databaseUtilities;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.prats.definitions.Message;
-import org.prats.messageHandler.MessageParser;
+import org.prats.inputHandler.utils.MessageParser;
 import org.prats.definitions.ProcessType;
 import org.prats.definitions.MessageType;
 
