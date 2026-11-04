@@ -74,7 +74,7 @@ public class Platform {
         }
     }
 
-    public static void initializeDummpyPlatformParams() {
+    public static void initializeDummyPlatformParams() {
         tcpPort             = 15000;
         tcpBacklog          = 50;
         coreThreads         = 10;
@@ -155,7 +155,7 @@ public class Platform {
          try {
              validatePlatformArgs();
          } catch (IllegalArgumentException ilexe) {
-             initializeDummpyPlatformParams();
+             initializeDummyPlatformParams();
          }
          // please remove -- for testing
 
