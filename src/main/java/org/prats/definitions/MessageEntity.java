@@ -5,16 +5,14 @@ import org.prats.inputHandler.utils.replyUtils.ReplyChannel;
 public class MessageEntity {
     private Message message;
     private ReplyChannel replyChannel;
-    private String originalMessage;
+//    private String originalMessage;
 
     public MessageEntity(
             Message message,
-            ReplyChannel replyChannel,
-            String originalMessage
+            ReplyChannel replyChannel
     ) {
         this.message            = message;
         this.replyChannel       = replyChannel;
-        this.originalMessage    = originalMessage;
     }
 
     public Message getMessage() {
@@ -33,11 +31,11 @@ public class MessageEntity {
         this.replyChannel = replyChannel;
     }
 
-    public String getOriginalMessage() {
-        return originalMessage;
-    }
-
-    public void setOriginalMessage(String originalMessage) {
-        this.originalMessage = originalMessage;
-    }
+//    public String getOriginalMessage() {
+//        return originalMessage;
+//    }
+//
+//    public void setOriginalMessage(String originalMessage) {
+//        this.originalMessage = originalMessage;
+//    }
 }

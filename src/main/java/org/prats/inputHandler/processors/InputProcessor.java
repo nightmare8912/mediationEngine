@@ -39,7 +39,7 @@ public class InputProcessor {
             // assuming its a command from shell, handover to command processor
             commandForwarder.processCommand(
                     new CommandEntity(
-                            messageEntity.getOriginalMessage(),
+                            messageEntity.getMessage().getFullStringOriginalMessage(),
                             messageEntity.getReplyChannel()
                     )
             );

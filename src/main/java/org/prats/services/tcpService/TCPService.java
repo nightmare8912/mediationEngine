@@ -137,8 +137,7 @@ public class TCPService implements Service, MessageSender {
                 messageService.submit(
                         new MessageEntity(
                                 messageParser.createMessageFromJSON(message),
-                                replyChannel,
-                                message
+                                replyChannel
                         )
                 );
             }

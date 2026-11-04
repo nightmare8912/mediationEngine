@@ -21,7 +21,7 @@ public class CommandForwarder {
     private void processShutdownCommand(CommandEntity commandEntity) {
         sendMessage(
                 new CommandEntity(
-                        "Requested the platform for a graceful shutdown. The connection with platform will disconnect when it goes down",
+                        "Requested the platform for a graceful shutdown. Your connection with platform will terminate when it goes down",
                         commandEntity.getReplyChannel()
                 )
         );
@@ -65,7 +65,7 @@ public class CommandForwarder {
             CommandEntity commandEntity
     ) {
         commandEntity.getReplyChannel().
-                sendMessage(
+                sendReply(
                         commandEntity.getCommand()
                 );
     }

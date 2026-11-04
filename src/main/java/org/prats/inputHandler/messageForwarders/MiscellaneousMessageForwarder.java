@@ -23,18 +23,17 @@ public class MiscellaneousMessageForwarder implements MessageForwarder {
 
     @Override
     public void forwardMessage(MessageEntity messageEntity, Service service) {
-        Message responseMessage = messageUtils.createAcknowledgementMessage(
-                messageProcessor.getProcessTypeDefinition(),
-                MessageType.ACK,
-                Operation.UNKNOWN,
-                messageEntity.getMessage().getCorrelationId()
-        );
-        messageProcessor.sendMessage(
-                new MessageEntity(
-                        responseMessage,
-                        messageEntity.getReplyChannel(),
-                        messageEntity.getOriginalMessage()
-                )
-        );
+//        Message responseMessage = messageUtils.createAcknowledgementMessage(
+//                messageProcessor.getProcessTypeDefinition(),
+//                MessageType.ACK,
+//                Operation.UNKNOWN,
+//                messageEntity.getMessage().getCorrelationId()
+//        );
+//        messageProcessor.sendMessage(
+//                new MessageEntity(
+//                        responseMessage,
+//                        messageEntity.getReplyChannel()
+//                )
+//        );
     }
 }

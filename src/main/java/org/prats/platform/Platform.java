@@ -116,6 +116,8 @@ public class Platform {
 
         // once initializing the message service, we need to pass a reference of it to the tcp service so that it can pass the message to it
         tcpService.setMessageService(messageService);
+        databaseService.setMessageService(messageService);
+
         messageService.setServiceRegistry(serviceRegistry);
 
         serviceRegistry.registerService(databaseService);

@@ -16,13 +16,15 @@ public class MessageUtils {
             Operation operation,
             UUID correlationID
     ) {
-        return new Message(
-                messageType,
-                processType,
-                operation,
-                new ObjectMapper().valueToTree("{}"),
-                correlationID
-        );
+//        return new Message(
+//                messageType,
+//                processType,
+//                operation,
+//                new ObjectMapper().valueToTree("{}"),
+//                correlationID
+//        );
+
+        return null;
     }
 
 }

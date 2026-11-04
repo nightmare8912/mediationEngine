@@ -1,6 +1,7 @@
 package org.prats.inputHandler.utils.replyUtils;
 
 import org.prats.definitions.ClientConnection;
+import org.prats.definitions.MessageEntity;
 import org.prats.services.tcpService.TCPService;
 
 public class TCPReplyChannel implements ReplyChannel {
@@ -16,7 +17,9 @@ public class TCPReplyChannel implements ReplyChannel {
     }
 
     @Override
-    public void sendMessage(String message) {
+    public void sendReply(
+            String message
+    ) {
         tcpService.sendMessage(
                 message,
                 clientConnection

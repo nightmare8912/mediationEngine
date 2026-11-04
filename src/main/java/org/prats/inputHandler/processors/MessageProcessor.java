@@ -77,7 +77,7 @@ public class MessageProcessor {
     public void sendMessage(
             MessageEntity messageEntity
     ) {
-        messageEntity.getReplyChannel().sendMessage(
+        messageEntity.getReplyChannel().sendReply(
                 messageParser.createJSONFromMessage(
                         messageEntity.getMessage()
                 )

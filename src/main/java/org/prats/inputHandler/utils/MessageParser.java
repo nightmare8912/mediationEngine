@@ -51,7 +51,8 @@ public class MessageParser {
                     MessageType.UNKNOWN,
                     ProcessType.UNKNOWN,
                     Operation.UNKNOWN,
-                    errorPayload
+                    errorPayload,
+                    message
             );
             }
         return messageDefinition;
@@ -71,7 +72,8 @@ public class MessageParser {
                         MessageType.UNKNOWN,
                         processType,
                         Operation.UNKNOWN,
-                        errorPayload
+                        errorPayload,
+                        message.getFullStringOriginalMessage()
                 ));
             } catch (JsonProcessingException ignored) {
                 // throw new RuntimeException(e);
