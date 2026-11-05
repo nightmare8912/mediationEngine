@@ -2,6 +2,7 @@ package org.prats.services.messageService;
 
 import org.prats.definitions.*;
 import org.prats.inputHandler.processors.InputProcessor;
+import org.prats.loggers.ShellLogger;
 import org.prats.services.Service;
 import org.prats.inputHandler.utils.MessageSender;
 import org.prats.services.ServiceRegistry;
@@ -146,7 +147,7 @@ public class MessageService implements Service, MessageSender, HealthCheckable {
 
     @Override
     public HealthReport checkHealth() {
-
+        ShellLogger.log("Health Check Initiated for: " + this.getClass().getSimpleName());
         Map<String, Object> metrics = new HashMap<>();
 
         metrics.put("activeTasks", activeTasks.get());
@@ -164,7 +165,7 @@ public class MessageService implements Service, MessageSender, HealthCheckable {
 
         metrics.put("executorRunning", executorRunning);
 
-        return new HealthReport(
+        HealthReport healthReport = new HealthReport(
                 getServiceName(),
                 status,
                 executorRunning
@@ -173,5 +174,9 @@ public class MessageService implements Service, MessageSender, HealthCheckable {
                 Instant.now(),
                 metrics
         );
+
+        ShellLogger.log("Report: " + healthReport + "\nHealth Check Ended for: " + this.getClass().getSimpleName());
+
+        return healthReport;
     }
 }

@@ -60,7 +60,7 @@ public class CommandLineInterface {
     }
 
     public void shutdownPlatform(FilePath filePath) {
-        int tcpPort;
+//        int tcpPort;
 //        ShellLogger.log("Stopping platform...");
 //        try
 //        {
@@ -87,28 +87,30 @@ public class CommandLineInterface {
 
         displayWelcomeMessage(filePath);
 
-        while (!command.equals("me kill"))
-        {
+        while (!command.equals("meng kill")) {
             command = sc.nextLine();
+
             switch (command) {
-                case "meng help":                   displayHelpMessage(filePath);
-                                                    break;
-                case "meng exit":                   displayExitMessage();
-                                                    break;
-                case  "meng initialize h2db":       createTablesFromConfig(filePath);
-                                                    break;
+                case "meng help" ->
+                        displayHelpMessage(filePath);
 
-                case "meng shutdown h2db":          shutdownH2Database();
-                                                    break;
+                case "meng exit" ->
+                        displayExitMessage();
 
-                case "meng start platform":         startPlatform(filePath);
-                                                    break;
+                case "meng initialize h2db" ->
+                        createTablesFromConfig(filePath);
 
-                case "meng shutdown platform":      shutdownPlatform(filePath);
-                                                    break;
+                case "meng shutdown h2db" ->
+                        shutdownH2Database();
 
-                default:                            displayCommandNotFoundMessage(command);
-                                                    break;
+                case "meng start platform" ->
+                        startPlatform(filePath);
+
+                case "meng shutdown platform" ->
+                        shutdownPlatform(filePath);
+
+                default ->
+                        displayCommandNotFoundMessage(command);
             }
         }
     }

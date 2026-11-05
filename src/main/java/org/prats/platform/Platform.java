@@ -5,6 +5,7 @@ import org.prats.definitions.ProcessType;
 import org.prats.services.PlatformServiceRegistry;
 import org.prats.services.ServiceRegistry;
 import org.prats.services.databaseService.DatabaseService;
+import org.prats.services.healthCheckService.HealthService;
 import org.prats.services.messageService.MessageService;
 import org.prats.services.tcpService.TCPService;
 import org.prats.threading.ThreadPool;
@@ -24,6 +25,7 @@ public class Platform {
     private static DatabaseService databaseService;
     private static MessageService messageService;
     private static TCPService tcpService;
+    private static HealthService healthService;
     private static ServiceRegistry serviceRegistry;
 
     public Platform() { this.containerProcess = new ArrayList<>(); }
@@ -85,6 +87,9 @@ public class Platform {
 
     // this is messy to wrap my head around, but messy is good?
     public static void startServices() {
+
+        serviceRegistry = new PlatformServiceRegistry();
+
         databaseService = new DatabaseService(
                 coreThreads,
                 maxThreads,
@@ -111,30 +116,40 @@ public class Platform {
                 tcpService
         );
 
-        serviceRegistry = new PlatformServiceRegistry();
+        healthService = new HealthService(
+                serviceRegistry,
+                50,
+                40
+        );
 
         // once initializing the message service, we need to pass a reference of it to the tcp service so that it can pass the message to it
         tcpService.setMessageService(messageService);
         databaseService.setMessageService(messageService);
-
         messageService.setServiceRegistry(serviceRegistry);
+
 
         serviceRegistry.registerService(databaseService);
         serviceRegistry.registerService(messageService);
         serviceRegistry.registerService(tcpService);
+        serviceRegistry.registerService(healthService);
 
         // starting all the services
-        ShellLogger.log("Attempting to start database service");
+        ShellLogger.log("Starting database service");
         databaseService.startService();
-        ShellLogger.log("Attempting to start message service");
+        ShellLogger.log("Starting message service");
         messageService.startService();
-        ShellLogger.log("Attempting to start tcp service");
+        ShellLogger.log("Starting tcp service");
         tcpService.startService();
-
+        ShellLogger.log("Starting health check service");
+        healthService.startService();
     }
 
     // shuts down all the services
     public static void shutdownServices() {
+//         commented out for test
+//        ShellLogger.log("shutting down health check service");
+//        healthCheckService.shutdownService();
+
         ShellLogger.log("shutting down tcp service");
         tcpService.shutdownService();
 
@@ -143,6 +158,8 @@ public class Platform {
 
         ShellLogger.log("shutting down message service");
         messageService.shutdownService();
+
+        serviceRegistry.clearRegistry();
     }
 
     private static void initiateShutdown() {

@@ -8,6 +8,7 @@ import org.prats.definitions.HealthReport;
 import org.prats.definitions.HealthStatus;
 import org.prats.definitions.MessageEntity;
 import org.prats.inputHandler.handlers.DatabaseMessageHandler;
+import org.prats.loggers.ShellLogger;
 import org.prats.services.Service;
 import org.prats.services.messageService.MessageService;
 import org.prats.threading.ThreadPool;
@@ -165,6 +166,8 @@ public class DatabaseService implements Service, HealthCheckable {
     @Override
     public HealthReport checkHealth() {
 
+        ShellLogger.log("Health Check Initiated for: " + this.getClass().getSimpleName());
+
         Map<String, Object> metrics = new HashMap<>();
 
         metrics.put("activeTasks", activeTasks.get());
@@ -203,7 +206,7 @@ public class DatabaseService implements Service, HealthCheckable {
                 ? HealthStatus.HEALTHY
                 : HealthStatus.UNHEALTHY;
 
-        return new HealthReport(
+        HealthReport healthReport = new HealthReport(
                 getServiceName(),
                 status,
                 databaseAvailable && executorRunning
@@ -212,5 +215,9 @@ public class DatabaseService implements Service, HealthCheckable {
                 Instant.now(),
                 metrics
         );
+
+        ShellLogger.log("Report: " + healthReport + "\nHealth Check Ended for: " + this.getClass().getSimpleName());
+
+        return healthReport;
     }
 }

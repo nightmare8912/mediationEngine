@@ -78,26 +78,28 @@ public class MessageSQLParser {
     }
 
     private SQLQuery processFetch(JsonNode payload) {
-        StringBuilder sql = new StringBuilder();
 
-        sql.append("SELECT ");
+        StringBuilder sql = new StringBuilder("SELECT ");
 
         JsonNode columns = payload.path("columns");
-        if (columns.isMissingNode() || columns.isNull() || columns.isEmpty())
-            sql.append("* ");
-        else
-        {
-            for(JsonNode column: columns)
-                sql.append(column.asText()).append(", ");
 
-            // remove ending comma, with its extra space
-            sql.setLength(sql.length() - 2);
+        if (columns.isMissingNode() || columns.isNull() || columns.isEmpty()) {
+            sql.append("*");
+        } else {
+            List<String> columnNames = new ArrayList<>();
+
+            for (JsonNode column : columns) {
+                columnNames.add(column.asText());
+            }
+
+            sql.append(String.join(", ", columnNames));
         }
 
         JsonNode tableName = payload.path("entity");
 
-        if (tableName.isMissingNode() || tableName.isNull() || tableName.isEmpty())
+        if (tableName.isMissingNode() || tableName.isNull() || tableName.isEmpty()) {
             return processInvalid(payload);
+        }
 
         sql.append(" FROM ").append(tableName.asText());
 

@@ -17,6 +17,7 @@ dependencies {
     implementation 'com.zaxxer:HikariCP:7.0.2'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.2'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.19.2'
+    implementation 'org.apache.commons:commons-csv:1.14.1'
 }
 
 tasks.register('printPlatformClasspath') {

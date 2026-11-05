@@ -274,6 +274,8 @@ public class TCPService implements Service, MessageSender, HealthCheckable {
     @Override
     public HealthReport checkHealth() {
 
+        ShellLogger.log("Health Check Initiated for: " + this.getClass().getSimpleName());
+
         Map<String, Object> metrics = new HashMap<>();
 
         metrics.put("listenerRunning",
@@ -301,7 +303,7 @@ public class TCPService implements Service, MessageSender, HealthCheckable {
         metrics.put("listenerRunning", listenerRunning);
         metrics.put("executorRunning", executorRunning);
 
-        return new HealthReport(
+        HealthReport healthReport = new HealthReport(
                 getServiceName(),
                 status,
                 listenerRunning && executorRunning
@@ -310,5 +312,9 @@ public class TCPService implements Service, MessageSender, HealthCheckable {
                 Instant.now(),
                 metrics
         );
+
+        ShellLogger.log("Report: " + healthReport + "\nHealth Check Ended for: " + this.getClass().getSimpleName());
+
+        return healthReport;
     }
 }

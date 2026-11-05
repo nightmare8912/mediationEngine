@@ -2,36 +2,68 @@ package org.prats.services.healthCheckService;
 
 import org.prats.definitions.HealthCheckable;
 import org.prats.definitions.HealthReport;
+import org.prats.definitions.HealthStatus;
 import org.prats.definitions.MessageEntity;
 import org.prats.loggers.ShellLogger;
 import org.prats.services.Service;
 import org.prats.services.ServiceRegistry;
+import org.prats.utilities.CircularBuffer;
 
+import java.time.Instant;
+import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-public class HealthCheckService implements Service {
+public class HealthService implements Service {
 
     private final String serviceName;
     private final ServiceRegistry serviceRegistry;
     private final ScheduledExecutorService scheduledThread;
+    private final CircularBuffer<Map<String, HealthReport>> healthReports;
+    private final int healthCheckRetention;
+    private final int loggingThreshold;
 
-    public HealthCheckService(
-            ServiceRegistry serviceRegistry
+    public HealthService(
+            ServiceRegistry serviceRegistry,
+            int healthCheckRetention,
+            int loggingThreshold
     ) {
-        this.serviceName        = this.getClass().getSimpleName();
-        this.serviceRegistry    = serviceRegistry;
-        scheduledThread         = Executors.newSingleThreadScheduledExecutor();
+        this.serviceName            = this.getClass().getSimpleName();
+        this.serviceRegistry        = serviceRegistry;
+        this.healthCheckRetention   = healthCheckRetention;
+        this.loggingThreshold       = loggingThreshold;
+        this.healthReports          = new CircularBuffer<>(healthCheckRetention, loggingThreshold);
+        scheduledThread             = Executors.newSingleThreadScheduledExecutor();
+    }
+
+    public void analyzeAndStoreHealthReport(Service service, HealthReport healthReport) {
+        Map<String, HealthReport> serviceHealth = new LinkedHashMap<>();
+
+        serviceHealth.put(service.getServiceName() + " " + healthReport.timestamp().toString(), healthReport);
+        healthReports.add(serviceHealth);
+
+    }
+
+    private HealthReport createServiceUnreachableHealthReport(Service service) {
+        return new HealthReport(
+                service.getServiceName(),
+                HealthStatus.UNREACHABLE,
+                service.getServiceName() + " is unreachable",
+                Instant.now(),
+                new HashMap<>()
+        );
     }
 
     public void performHealthChecks() {
         for(Service service: serviceRegistry.getAllServices()) {
             if (service instanceof HealthCheckable healthCheckable) {
                 try {
-                    HealthReport healthReport = healthCheckable.checkHealth();
-                } catch (Exception exe) {
+                    analyzeAndStoreHealthReport(service, healthCheckable.checkHealth());
+                } catch (Exception exception) {
                     // this is bad, could not get response from service...
+                    ShellLogger.log("[HealthService] [performHealthChecks] Exception: " + exception.getMessage());
+                    analyzeAndStoreHealthReport(service, createServiceUnreachableHealthReport(service));
                 }
             }
         }

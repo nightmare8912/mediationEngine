@@ -33,4 +33,9 @@ public class PlatformServiceRegistry implements ServiceRegistry {
     public List<Service> getAllServices() {
         return List.copyOf(services.values());
     }
+
+    @Override
+    public void clearRegistry() {
+        services.clear();
+    }
 }

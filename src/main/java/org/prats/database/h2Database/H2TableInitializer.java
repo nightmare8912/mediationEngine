@@ -1,6 +1,7 @@
 package org.prats.database.h2Database;
 
 import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool;
+import org.prats.database.databaseUtilities.sqlHelper.SQLQuery;
 import org.prats.fileHanldingUtilities.configParser.ConfigParser;
 import org.prats.database.databaseUtilities.sqlHelper.SQLSyntaxHelper;
 import org.prats.definitions.Database;
@@ -70,11 +71,11 @@ public class H2TableInitializer {
 
         if (errorMessage.isEmpty())
         {
-            String sql = sqlSyntaxHelper.createTableStatementHelper(table);
-            System.out.println(sql);
+            SQLQuery sql = sqlSyntaxHelper.createTableStatementHelper(table);
+            System.out.println(sql.query());
             try (Statement statement = connection.createStatement())
             {
-                statement.execute(sql);
+                statement.execute(sql.query());
             } catch (SQLException sqle)
             {
                 errorMessage.append("Error code: \n")
