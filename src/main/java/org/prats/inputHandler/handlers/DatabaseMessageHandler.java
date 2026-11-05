@@ -5,7 +5,6 @@ import org.prats.database.databaseUtilities.sqlHelper.SQLQuery;
 import org.prats.definitions.MessageEntity;
 import org.prats.definitions.Operation;
 import org.prats.services.databaseService.DatabaseService;
-import org.prats.services.messageService.MessageService;
 
 import java.sql.Connection;
 import java.sql.ResultSet;

@@ -1,10 +1,12 @@
 package org.prats.inputHandler.processors;
 
 import org.prats.definitions.MessageEntity;
+import org.prats.definitions.MessageType;
 import org.prats.definitions.Operation;
 import org.prats.definitions.ProcessType;
 import org.prats.inputHandler.messageForwarders.*;
 import org.prats.inputHandler.utils.*;
+import org.prats.loggers.ShellLogger;
 import org.prats.services.ServiceRegistry;
 import org.prats.services.databaseService.DatabaseService;
 import org.prats.services.messageService.MessageService;
@@ -25,7 +27,6 @@ public class MessageProcessor {
 
     public MessageProcessor(
             ProcessType processType,
-            MessageService messageService,
             ServiceRegistry serviceRegistry
     ) {
         this.messageParser                  = new MessageParser(processType);
@@ -51,20 +52,28 @@ public class MessageProcessor {
     // however, in case of miscellaneous messages, the same thread can respond, as it is a miscellaneous message, we dnt know where to deliver the message so we can just send a response back
     public void forwardMessage(MessageEntity messageEntity) {
 
-        Operation operation = messageEntity.getMessage().getOperation();
+        MessageType messageType = messageEntity.getMessage().getMessageType();
+        Operation operation     = messageEntity.getMessage().getOperation();
 
-        switch (operation) {
-            case FETCH, SEARCH, CREATE, UPDATE, DELETE -> databaseMessageForwarder.forwardMessage(
-                    messageEntity,
-                    serviceRegistry.getService(DatabaseService.class)
-            );
+        if (messageType == MessageType.REQUEST) {
+            switch (operation) {
+                case FETCH, SEARCH, CREATE, UPDATE, DELETE -> databaseMessageForwarder.forwardMessage(
+                        messageEntity,
+                        serviceRegistry.getService(DatabaseService.class)
+                );
 
-            default -> miscellaneousMessageHandler.forwardMessage(
-                    messageEntity,
-                    serviceRegistry.getService(MessageService.class)
-            );
+                default -> miscellaneousMessageHandler.forwardMessage(
+                        messageEntity,
+                        serviceRegistry.getService(MessageService.class)
+                );
+            }
         }
-
+        else if (messageType == MessageType.RESPONSE) {
+            sendResponse(messageEntity);
+        }
+        else {
+            ShellLogger.log("Invalid Message type: " + messageType);
+        }
     }
 
     // well this reads the string message from other services and standardizes it, and then sends it over to forwardMessage from where it would be sent to dedicated handlers
@@ -74,7 +83,7 @@ public class MessageProcessor {
         );
     }
 
-    public void sendMessage(
+    public void sendResponse(
             MessageEntity messageEntity
     ) {
         messageEntity.getReplyChannel().sendReply(

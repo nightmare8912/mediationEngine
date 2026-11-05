@@ -84,12 +84,11 @@ public class Platform {
     }
 
     // this is messy to wrap my head around, but messy is good?
-    public void startServices() {
+    public static void startServices() {
         databaseService = new DatabaseService(
                 coreThreads,
                 maxThreads,
                 idleTimeout,
-                ProcessType.PLATFORM,
                 databaseConfigFile
         );
 
@@ -125,23 +124,45 @@ public class Platform {
         serviceRegistry.registerService(tcpService);
 
         // starting all the services
+        ShellLogger.log("Attempting to start database service");
         databaseService.startService();
+        ShellLogger.log("Attempting to start message service");
         messageService.startService();
+        ShellLogger.log("Attempting to start tcp service");
         tcpService.startService();
 
     }
 
     // shuts down all the services
     public static void shutdownServices() {
-        databaseService.shutdownService();
-        messageService.shutdownService();
+        ShellLogger.log("shutting down tcp service");
         tcpService.shutdownService();
+
+        ShellLogger.log("shutting down database service");
+        databaseService.shutdownService();
+
+        ShellLogger.log("shutting down message service");
+        messageService.shutdownService();
     }
 
-    public static void  shutdown() {
+    private static void initiateShutdown() {
         shutdownServices();
         ShellLogger.log("Killing the platform...");
         System.exit(0);
+    }
+
+    public static void  shutdown() {
+        threadPool.submit(Platform::initiateShutdown);
+    }
+
+    private static void initiateRestartServices() {
+        shutdownServices();
+        ShellLogger.log("Attempting to restart services...");
+        startServices();
+    }
+
+    public static void restartServices() {
+        threadPool.submit(Platform::initiateRestartServices);
     }
 
     public static void main(String[] args) throws IllegalArgumentException, IOException {
@@ -166,9 +187,10 @@ public class Platform {
         threadPool = new ThreadPool().initializeAndGetThreadPool(
                     coreThreads,
                     maxThreads,
-                    idleTimeout
+                    idleTimeout,
+                    true
         );
 
-        platform.startServices();
+        startServices();
     }
 }

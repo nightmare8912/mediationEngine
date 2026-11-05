@@ -12,23 +12,15 @@ import org.prats.services.messageService.MessageService;
 public class InputProcessor {
     private final MessageProcessor messageProcessor;
     private final CommandForwarder commandForwarder;
-    private final ProcessType processType;
-    private final MessageService messageService;
-    private final MessageParser messageParser;
 
     public InputProcessor(
             ProcessType processType,
-            MessageService messageService,
             ServiceRegistry serviceRegistry
     ) {
-        this.processType = processType;
-        this.messageService        = messageService;
         this.messageProcessor      = new MessageProcessor(
                 processType,
-                messageService,
                 serviceRegistry
         );
-        this.messageParser    = new MessageParser(processType);
         this.commandForwarder = new CommandForwarder();
     }
 

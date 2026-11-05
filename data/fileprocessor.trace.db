@@ -268,3 +268,134 @@ Caused by: org.h2.mvstore.MVStoreException: The file is locked: /Users/pratyush.
 	at org.h2.mvstore.SingleFileStore.open(SingleFileStore.java:81)
 	at org.h2.mvstore.MVStore.<init>(MVStore.java:293)
 	... 22 more
+2026-11-05 05:45:50.896831+05:30 database: flush
+org.h2.message.DbException: General error: "org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]" [50000-252]
+	at org.h2.message.DbException.get(DbException.java:212)
+	at org.h2.message.DbException.convert(DbException.java:407)
+	at org.h2.mvstore.db.Store.lambda$new$0(Store.java:123)
+	at org.h2.mvstore.MVStore.handleException(MVStore.java:1693)
+	at org.h2.mvstore.MVStore.panic(MVStore.java:521)
+	at org.h2.mvstore.MVStore.<init>(MVStore.java:298)
+	at org.h2.mvstore.MVStore$Builder.open(MVStore.java:2193)
+	at org.h2.mvstore.db.Store.<init>(Store.java:140)
+	at org.h2.engine.Database.<init>(Database.java:328)
+	at org.h2.engine.Engine.openSession(Engine.java:92)
+	at org.h2.engine.Engine.openSession(Engine.java:222)
+	at org.h2.engine.Engine.createSession(Engine.java:201)
+	at org.h2.engine.SessionRemote.connectEmbeddedOrServer(SessionRemote.java:350)
+	at org.h2.jdbc.JdbcConnection.<init>(JdbcConnection.java:124)
+	at org.h2.Driver.connect(Driver.java:59)
+	at com.zaxxer.hikari.util.DriverDataSource.getConnection(DriverDataSource.java:144)
+	at com.zaxxer.hikari.pool.PoolBase.newConnection(PoolBase.java:373)
+	at com.zaxxer.hikari.pool.PoolBase.newPoolEntry(PoolBase.java:210)
+	at com.zaxxer.hikari.pool.HikariPool.createPoolEntry(HikariPool.java:488)
+	at com.zaxxer.hikari.pool.HikariPool.checkFailFast(HikariPool.java:576)
+	at com.zaxxer.hikari.pool.HikariPool.<init>(HikariPool.java:97)
+	at com.zaxxer.hikari.HikariDataSource.<init>(HikariDataSource.java:80)
+	at org.prats.database.hikariDatabasePooling.HikariDataBaseUtilities.initializeHikariSource(HikariDataBaseUtilities.java:30)
+	at org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool.initialize(HikariDBConnectionPool.java:25)
+	at org.prats.database.h2Database.H2DatabaseInitializer.initializeH2Database(H2DatabaseInitializer.java:23)
+	at org.prats.services.databaseService.DatabaseService.startService(DatabaseService.java:65)
+	at org.prats.platform.Platform.startServices(Platform.java:127)
+	at org.prats.platform.Platform.restartServices(Platform.java:149)
+	at org.prats.inputHandler.messageForwarders.CommandForwarder.processRestartServicesCommand(CommandForwarder.java:42)
+	at org.prats.inputHandler.messageForwarders.CommandForwarder.processCommand(CommandForwarder.java:68)
+	at org.prats.inputHandler.processors.InputProcessor.processInput(InputProcessor.java:32)
+	at org.prats.services.messageService.MessageService.lambda$submit$1(MessageService.java:103)
+	at org.prats.services.messageService.MessageService.lambda$submitToThreadPool$0(MessageService.java:82)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:572)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+	at java.base/java.lang.VirtualThread.run(VirtualThread.java:329)
+Caused by: org.h2.jdbc.JdbcSQLNonTransientException: General error: "org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]" [50000-252]
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:566)
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:489)
+	... 36 more
+Caused by: org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]
+	at org.h2.mvstore.DataUtils.newMVStoreException(DataUtils.java:998)
+	at org.h2.mvstore.SingleFileStore.open(SingleFileStore.java:126)
+	at org.h2.mvstore.SingleFileStore.open(SingleFileStore.java:81)
+	at org.h2.mvstore.MVStore.<init>(MVStore.java:293)
+	... 30 more
+Caused by: java.nio.channels.ClosedByInterruptException
+	at java.base/java.nio.channels.spi.AbstractInterruptibleChannel.end(AbstractInterruptibleChannel.java:214)
+	at java.base/sun.nio.ch.FileChannelImpl.endBlocking(FileChannelImpl.java:181)
+	at java.base/sun.nio.ch.FileChannelImpl.size(FileChannelImpl.java:526)
+	at org.h2.mvstore.SingleFileStore.open(SingleFileStore.java:120)
+	... 32 more
+2026-11-05 05:45:50.903927+05:30 database: opening /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor
+org.h2.message.DbException: IO Exception: "/Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db" [90028-252]
+	at org.h2.message.DbException.get(DbException.java:212)
+	at org.h2.mvstore.db.Store.convertMVStoreException(Store.java:175)
+	at org.h2.mvstore.db.Store.<init>(Store.java:149)
+	at org.h2.engine.Database.<init>(Database.java:328)
+	at org.h2.engine.Engine.openSession(Engine.java:92)
+	at org.h2.engine.Engine.openSession(Engine.java:222)
+	at org.h2.engine.Engine.createSession(Engine.java:201)
+	at org.h2.engine.SessionRemote.connectEmbeddedOrServer(SessionRemote.java:350)
+	at org.h2.jdbc.JdbcConnection.<init>(JdbcConnection.java:124)
+	at org.h2.Driver.connect(Driver.java:59)
+	at com.zaxxer.hikari.util.DriverDataSource.getConnection(DriverDataSource.java:144)
+	at com.zaxxer.hikari.pool.PoolBase.newConnection(PoolBase.java:373)
+	at com.zaxxer.hikari.pool.PoolBase.newPoolEntry(PoolBase.java:210)
+	at com.zaxxer.hikari.pool.HikariPool.createPoolEntry(HikariPool.java:488)
+	at com.zaxxer.hikari.pool.HikariPool.checkFailFast(HikariPool.java:576)
+	at com.zaxxer.hikari.pool.HikariPool.<init>(HikariPool.java:97)
+	at com.zaxxer.hikari.HikariDataSource.<init>(HikariDataSource.java:80)
+	at org.prats.database.hikariDatabasePooling.HikariDataBaseUtilities.initializeHikariSource(HikariDataBaseUtilities.java:30)
+	at org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool.initialize(HikariDBConnectionPool.java:25)
+	at org.prats.database.h2Database.H2DatabaseInitializer.initializeH2Database(H2DatabaseInitializer.java:23)
+	at org.prats.services.databaseService.DatabaseService.startService(DatabaseService.java:65)
+	at org.prats.platform.Platform.startServices(Platform.java:127)
+	at org.prats.platform.Platform.restartServices(Platform.java:149)
+	at org.prats.inputHandler.messageForwarders.CommandForwarder.processRestartServicesCommand(CommandForwarder.java:42)
+	at org.prats.inputHandler.messageForwarders.CommandForwarder.processCommand(CommandForwarder.java:68)
+	at org.prats.inputHandler.processors.InputProcessor.processInput(InputProcessor.java:32)
+	at org.prats.services.messageService.MessageService.lambda$submit$1(MessageService.java:103)
+	at org.prats.services.messageService.MessageService.lambda$submitToThreadPool$0(MessageService.java:82)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:572)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+	at java.base/java.lang.VirtualThread.run(VirtualThread.java:329)
+Caused by: org.h2.jdbc.JdbcSQLNonTransientException: IO Exception: "/Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db" [90028-252]
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:566)
+	at org.h2.message.DbException.getJdbcSQLException(DbException.java:489)
+	... 31 more
+Caused by: org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]
+	at org.h2.mvstore.DataUtils.newMVStoreException(DataUtils.java:998)
+	at org.h2.mvstore.SingleFileStore.open(SingleFileStore.java:126)
+	at org.h2.mvstore.SingleFileStore.open(SingleFileStore.java:81)
+	at org.h2.mvstore.MVStore.<init>(MVStore.java:293)
+	at org.h2.mvstore.MVStore$Builder.open(MVStore.java:2193)
+	at org.h2.mvstore.db.Store.<init>(Store.java:140)
+	... 28 more
+	Suppressed: org.h2.message.DbException: General error: "org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]" [50000-252]
+		at org.h2.message.DbException.get(DbException.java:212)
+		at org.h2.message.DbException.convert(DbException.java:407)
+		at org.h2.mvstore.db.Store.lambda$new$0(Store.java:123)
+		at org.h2.mvstore.MVStore.handleException(MVStore.java:1693)
+		at org.h2.mvstore.MVStore.panic(MVStore.java:521)
+		at org.h2.mvstore.MVStore.<init>(MVStore.java:298)
+		... 30 more
+	Caused by: org.h2.jdbc.JdbcSQLNonTransientException: General error: "org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]" [50000-252]
+		at org.h2.message.DbException.getJdbcSQLException(DbException.java:566)
+		at org.h2.message.DbException.getJdbcSQLException(DbException.java:489)
+		... 36 more
+	Caused by: [CIRCULAR REFERENCE: org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]]
+	Suppressed: org.h2.message.DbException: General error: "org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]" [50000-252]
+		at org.h2.message.DbException.get(DbException.java:212)
+		at org.h2.message.DbException.convert(DbException.java:407)
+		at org.h2.mvstore.db.Store.lambda$new$0(Store.java:123)
+		at org.h2.mvstore.MVStore.handleException(MVStore.java:1693)
+		at org.h2.mvstore.MVStore.unlockAndCheckPanicCondition(MVStore.java:505)
+		at org.h2.mvstore.MVStore.<init>(MVStore.java:318)
+		... 30 more
+	Caused by: org.h2.jdbc.JdbcSQLNonTransientException: General error: "org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]" [50000-252]
+		at org.h2.message.DbException.getJdbcSQLException(DbException.java:566)
+		at org.h2.message.DbException.getJdbcSQLException(DbException.java:489)
+		... 36 more
+	Caused by: [CIRCULAR REFERENCE: org.h2.mvstore.MVStoreException: Could not open file /Users/pratyush./Desktop/coding/mediationEngine2/data/fileprocessor.mv.db [2.5.252/1]]
+Caused by: java.nio.channels.ClosedByInterruptException
+	at java.base/java.nio.channels.spi.AbstractInterruptibleChannel.end(AbstractInterruptibleChannel.java:214)
+	at java.base/sun.nio.ch.FileChannelImpl.endBlocking(FileChannelImpl.java:181)
+	at java.base/sun.nio.ch.FileChannelImpl.size(FileChannelImpl.java:526)
+	at org.h2.mvstore.SingleFileStore.open(SingleFileStore.java:120)
+	... 32 more

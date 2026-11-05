@@ -38,9 +38,17 @@ public class CommandForwarder {
         System.exit(0);
     }
 
-    private void processUnknowmCommand(
-            CommandEntity commandEntity
-    ) {
+    private void processRestartServicesCommand(CommandEntity commandEntity) {
+        Platform.restartServices();
+        sendMessage(
+                new CommandEntity(
+                        "Doing a graceful restart",
+                        commandEntity.getReplyChannel()
+                )
+        );
+    }
+
+    private void processUnknowmCommand(CommandEntity commandEntity) {
         sendMessage(
                 new CommandEntity(
                         "Unknown command: " + commandEntity.getCommand(),
@@ -57,6 +65,7 @@ public class CommandForwarder {
             case "status"           ->  processStatusResponse(commandEntity);
             case "shutdown"         ->  processShutdownCommand(commandEntity);
             case "kill"             ->  processKillCommand(commandEntity);
+            case "restart services" ->  processRestartServicesCommand(commandEntity);
             default                 ->  processUnknowmCommand(commandEntity);
         }
     }
