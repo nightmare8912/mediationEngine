@@ -1,6 +1,5 @@
 package org.prats.database.h2Database;
 
-import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool;
 import org.prats.database.databaseUtilities.sqlHelper.SQLQuery;
 import org.prats.fileHanldingUtilities.configParser.ConfigParser;
 import org.prats.database.databaseUtilities.sqlHelper.SQLSyntaxHelper;
@@ -8,6 +7,7 @@ import org.prats.definitions.Database;
 import org.prats.definitions.DatabaseTable;
 import org.prats.definitions.Table;
 import org.prats.definitions.TableField;
+import org.prats.refractoring.DatabaseConnectionPool;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -17,15 +17,16 @@ import java.util.Comparator;
 
 public class H2TableInitializer {
     private String databaseConfigFile;
-    private HikariDBConnectionPool hikariDBConnectionPool;
+    private DatabaseConnectionPool databaseConnectionPool;
 
-    public H2TableInitializer() {
-        hikariDBConnectionPool = new HikariDBConnectionPool();
+    public H2TableInitializer(
+            String databaseConfigFile,
+            DatabaseConnectionPool databaseConnectionPool
+    ) {
+        this.databaseConfigFile     = databaseConfigFile;
+        this.databaseConnectionPool = databaseConnectionPool;
     }
 
-    public H2TableInitializer(String databaseConfigFile) {
-        this.databaseConfigFile = databaseConfigFile;
-    }
 
     private StringBuilder validateTable(Table table) {
         boolean isError = false;
@@ -79,9 +80,9 @@ public class H2TableInitializer {
             } catch (SQLException sqle)
             {
                 errorMessage.append("Error code: \n")
-                                .append(sqle.getErrorCode())
-                                .append("\nTrace: \n")
-                                .append(Arrays.toString(sqle.getStackTrace()));
+                        .append(sqle.getErrorCode())
+                        .append("\nTrace: \n")
+                        .append(Arrays.toString(sqle.getStackTrace()));
             }
         }
         return errorMessage;
@@ -104,7 +105,7 @@ public class H2TableInitializer {
                 }
         );
 
-        hikariDBConnectionPool.initialize(
+        databaseConnectionPool.initialize(
                 database.url(),
                 database.user(),
                 database.pass(),
@@ -114,7 +115,7 @@ public class H2TableInitializer {
         );
 
         for (DatabaseTable table: database.tables()) {
-            try (Connection connection = hikariDBConnectionPool.getConnection())
+            try (Connection connection = databaseConnectionPool.getDataSource().getConnection())
             {
                 System.out.println("Creating table: " + table.tableId());
                 errorMessage = createTable(connection, configParser.initializeTableConfig(table.path()));

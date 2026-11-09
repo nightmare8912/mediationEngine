@@ -14,7 +14,7 @@ public enum Operation {
     STATUS,
 
     AUTHENTICATE,
-    HEALTH_CHECK,
+    COMMAND,
 
     UNKNOWN
 }

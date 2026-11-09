@@ -1,93 +1,132 @@
+
 package org.prats.services.databaseService;
 
-import com.zaxxer.hikari.HikariDataSource;
-import com.zaxxer.hikari.HikariPoolMXBean;
-import org.prats.database.h2Database.H2DatabaseInitializer;
+import org.prats.database.databaseUtilities.DatabaseResourceManager;
 import org.prats.definitions.HealthCheckable;
 import org.prats.definitions.HealthReport;
 import org.prats.definitions.HealthStatus;
-import org.prats.definitions.MessageEntity;
-import org.prats.inputHandler.handlers.DatabaseMessageHandler;
-import org.prats.loggers.ShellLogger;
+import org.prats.definitions.Message;
+import org.prats.services.messageService.MessageDispatcher;
+import org.prats.handlers.DatabaseRequestHandler;
 import org.prats.services.Service;
-import org.prats.services.messageService.MessageService;
 import org.prats.threading.ThreadPool;
 
+import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.LockSupport;
 
-public class DatabaseService implements Service, HealthCheckable {
+public class DatabaseService implements Service, Submittable, HealthCheckable {
 
-    private HikariDataSource dataSource;
-    private final H2DatabaseInitializer databaseInitializer;
-
-    private final AtomicInteger activeTasks;
-    private final LongAdder submittedTasks;
-    private final LongAdder completedTasks;
-    private final LongAdder rejectedTasks;
-    private final LongAdder failedTasks;
     private final Object admissionLock;
+    private final DatabaseResourceManager databaseResourceManager;
+    private final DatabaseRequestHandler databaseRequestHandler;
 
-    private MessageService messageService;
-    private final ExecutorService threadPool;
-    private final DatabaseMessageHandler databaseMessageHandler;
-    private final String serviceName;
+    private final int coreThreads;
+    private final int maxThreads;
+    private final long idleTimeout;
 
-    private volatile boolean acceptWork;
+    private DataSource dataSource;
+    private MessageDispatcher messageDispatcher;
+    private ExecutorService databaseWorkers;
+
+    private volatile boolean isQuiescing;
+
+    private final AtomicLong submittedTasks = new AtomicLong();
+    private final AtomicLong completedTasks = new AtomicLong();
+    private final AtomicLong failedTasks = new AtomicLong();
+    private final AtomicLong rejectedTasks = new AtomicLong();
+    private final AtomicLong rejectedDuringQuiesce = new AtomicLong();
+    private final AtomicLong connectionAcquisitionFailures = new AtomicLong();
+
+    private final AtomicInteger activeTasks = new AtomicInteger();
+    private final AtomicInteger outstandingTasks = new AtomicInteger();
+
+    private long lastReportedFailedTasks;
+    private long lastReportedRejectedTasks;
 
     public DatabaseService(
             int coreThreads,
             int maxThreads,
-            int idleTimeout,
-            String databaseConfigFile
+            long idleTimeout,
+            DatabaseResourceManager databaseResourceManager,
+            DatabaseRequestHandler databaseRequestHandler
     ) {
-        this.acceptWork             = false;
-        this.serviceName            = this.getClass().getSimpleName();
-        this.databaseInitializer    = new H2DatabaseInitializer(databaseConfigFile);
-        this.databaseMessageHandler = new DatabaseMessageHandler(this);
-        this.activeTasks            = new AtomicInteger();
-        this.submittedTasks         = new LongAdder();
-        this.completedTasks         = new LongAdder();
-        this.rejectedTasks          = new LongAdder();
-        this.failedTasks            = new LongAdder();
-        this.admissionLock          = new Object();
-        threadPool                  = new ThreadPool().initializeAndGetThreadPool(
+        this.coreThreads                = coreThreads;
+        this.maxThreads                 = maxThreads;
+        this.idleTimeout                = idleTimeout;
+        this.isQuiescing                = true;
+        this.databaseRequestHandler     = databaseRequestHandler;
+
+        this.databaseResourceManager    = databaseResourceManager;
+        this.admissionLock              = new Object();
+    }
+
+    @Override
+    public void start() {
+        databaseResourceManager.initialize();
+        dataSource  = databaseResourceManager.getDataSource();
+
+        databaseWorkers = new ThreadPool().initializeAndGetThreadPool(
                 coreThreads,
                 maxThreads,
                 idleTimeout,
                 false
         );
+
+        isQuiescing = false;
     }
 
     @Override
-    public Service startService() {
-        databaseInitializer.initializeH2Database();
-        dataSource = databaseInitializer.getH2DBConnectionPool();
-        acceptWork = true;
-        return this;
+    public void shutdown() {
+        databaseWorkers.shutdownNow();
+        if (dataSource != null) {
+            databaseResourceManager.close();
+        }
     }
 
     @Override
-    public String getServiceName() {
-        return serviceName;
-    }
-
-    // calling thread (message service) can submit the call to db thread and return to its pool
-    public void submit(MessageEntity messageEntity) {
+    public void quiesce() {
         synchronized (admissionLock) {
-            if (acceptWork)
+            isQuiescing = true;
+        }
+    }
+
+    @Override
+    public void drain(long timeout) {
+        // check for work completion for a certain period
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
+        while (hasOutstandingWork()) {
+            if (System.nanoTime() >= deadline) {
+                break;
+            }
+            LockSupport.parkNanos(
+                    TimeUnit.MILLISECONDS.toNanos(100)
+            );
+        }
+    }
+
+    private boolean hasOutstandingWork() {
+        return outstandingTasks.get() > 0;
+    }
+
+    @Override
+    public void submit(Message message) {
+        synchronized (admissionLock) {
+            if (!isQuiescing)
                 submitToThreadPool(() -> {
-                    databaseMessageHandler.handleMessage(messageEntity);
+                    messageDispatcher.dispatchResponse(databaseRequestHandler.handleRequest(message));
                 });
             else {
+                rejectedDuringQuiesce.incrementAndGet();
                 // TODO: this is important, a message needs to be delivered back to the caller that the db service is not accepting work,
                 // otherwise, the calling service would not know what happened with their request
             }
@@ -95,129 +134,123 @@ public class DatabaseService implements Service, HealthCheckable {
     }
 
     public Connection getConnection() throws SQLException {
-        return dataSource.getConnection();
-    }
-
-    public void setMessageService(MessageService messageService) {
-        this.messageService = messageService;
-    }
-
-    public void sendMessage(MessageEntity messageEntity) {
-        messageService.submit(
-            messageEntity
-        );
-    }
-
-    // centralized the submit task to capture diagnostic at one place
-    private void submitToThreadPool(Runnable runnable) {
-        submittedTasks.increment();
         try {
-            threadPool.submit(() -> {
-                activeTasks.incrementAndGet();
-                try {
-                    runnable.run();
-                } catch (Exception e) {
-                    failedTasks.increment();
-                    throw e;
-                } finally {
-                    activeTasks.decrementAndGet();
-                    completedTasks.increment();
-                }
-            });
-
-        } catch (RejectedExecutionException e) {
-            rejectedTasks.increment();
+            return dataSource.getConnection();
+        } catch (SQLException e) {
+            connectionAcquisitionFailures.incrementAndGet();
             throw e;
         }
     }
 
-    @Override
-    public void shutdownService() {
-
-        synchronized (admissionLock) {
-            acceptWork = false;
-        }
-
-        threadPool.shutdown();
-
+    // centralized the submit task to capture diagnostic at one place
+    private void submitToThreadPool(Runnable runnable) {
         try {
-            if (!threadPool.awaitTermination(30, TimeUnit.SECONDS)) {
-                threadPool.shutdownNow();
-
-                if (!threadPool.awaitTermination(10, TimeUnit.SECONDS)) {
-                    throw new IllegalStateException(
-                            "Database executor failed to terminate"
-                    );
+            outstandingTasks.incrementAndGet();
+            databaseWorkers.submit(() -> {
+                activeTasks.incrementAndGet();
+                try {
+                    runnable.run();
+                } catch (Exception e) {
+                    failedTasks.incrementAndGet();
+                    throw e;
+                } finally {
+                    completedTasks.incrementAndGet();
+                    activeTasks.decrementAndGet();
+                    outstandingTasks.decrementAndGet();
                 }
-            }
-        } catch (InterruptedException e) {
-            threadPool.shutdownNow();
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(
-                    "Interrupted while shutting down DatabaseService", e
-            );
-        }
+            });
 
-        if (dataSource != null) {
-            dataSource.close();
+            submittedTasks.incrementAndGet();
+
+        } catch (RejectedExecutionException e) {
+            outstandingTasks.decrementAndGet();
+            rejectedTasks.incrementAndGet();
+            throw e;
         }
     }
 
+    public void setMessageDispatcher(MessageDispatcher messageDispatcher) {
+        this.messageDispatcher = messageDispatcher;
+    }
+
     @Override
-    public HealthReport checkHealth() {
+    public synchronized HealthReport checkHealth() {
 
-        ShellLogger.log("Health Check Initiated for: " + this.getClass().getSimpleName());
+        Map<String, Object> metrics = new LinkedHashMap<>();
 
-        Map<String, Object> metrics = new HashMap<>();
+        metrics.put("isQuiescing", isQuiescing);
+        metrics.put("dataSourceInitialized", dataSource != null);
+        metrics.put("executorInitialized", databaseWorkers != null);
+
+        metrics.put("submittedTasks", submittedTasks.get());
+        metrics.put("completedTasks", completedTasks.get());
+        metrics.put("failedTasks", failedTasks.get());
+        metrics.put("rejectedTasks", rejectedTasks.get());
+        metrics.put("rejectedDuringQuiesce", rejectedDuringQuiesce.get());
 
         metrics.put("activeTasks", activeTasks.get());
-        metrics.put("submittedTasks", submittedTasks.sum());
-        metrics.put("completedTasks", completedTasks.sum());
-        metrics.put("rejectedTasks", rejectedTasks.sum());
-        metrics.put("failedTasks", failedTasks.sum());
+        metrics.put("outstandingTasks", outstandingTasks.get());
 
-        boolean databaseAvailable = false;
+        metrics.put("connectionAcquisitionFailures",
+                connectionAcquisitionFailures.get());
 
-        if (dataSource != null && !dataSource.isClosed()) {
-            try (Connection connection = dataSource.getConnection()) {
-                databaseAvailable = connection.isValid(2);
-            } catch (SQLException e) {
-                databaseAvailable = false;
+        if (databaseWorkers != null) {
+            metrics.put("executorShutdown", databaseWorkers.isShutdown());
+            metrics.put("executorTerminated", databaseWorkers.isTerminated());
+        }
+
+        HealthStatus status;
+        String message;
+
+        if (databaseWorkers == null || dataSource == null) {
+            status = HealthStatus.UNREACHABLE;
+            message = "Database service has not been initialized.";
+        } else if (databaseWorkers.isTerminated() || databaseWorkers.isShutdown()) {
+            status = HealthStatus.UNHEALTHY;
+            message = "Database worker executor is no longer operational.";
+        } else {
+            boolean databaseConnectionAvailable = checkDatabaseConnection();
+
+            metrics.put("databaseConnectionAvailable",
+                    databaseConnectionAvailable);
+
+            if (!databaseConnectionAvailable) {
+                status = HealthStatus.UNHEALTHY;
+                message = "Unable to establish a database connection.";
+            } else {
+                boolean newTaskFailures =
+                        failedTasks.get() > lastReportedFailedTasks;
+
+                boolean newTaskRejections =
+                        rejectedTasks.get() > lastReportedRejectedTasks;
+
+                lastReportedFailedTasks = failedTasks.get();
+                lastReportedRejectedTasks = rejectedTasks.get();
+
+                if (newTaskFailures || newTaskRejections) {
+                    status = HealthStatus.DEGRADED;
+                    message = "Database service is operational but has experienced task failures or rejections.";
+                } else {
+                    status = HealthStatus.HEALTHY;
+                    message = "Database service is operating normally.";
+                }
             }
         }
 
-        if (databaseAvailable) {
-            HikariPoolMXBean pool = dataSource.getHikariPoolMXBean();
-
-            metrics.put("activeConnections", pool.getActiveConnections());
-            metrics.put("idleConnections", pool.getIdleConnections());
-            metrics.put("totalConnections", pool.getTotalConnections());
-            metrics.put("threadsAwaitingConnection",
-                    pool.getThreadsAwaitingConnection());
-        }
-
-        boolean executorRunning = !threadPool.isShutdown()
-                && !threadPool.isTerminated();
-
-        metrics.put("databaseAvailable", databaseAvailable);
-        metrics.put("executorRunning", executorRunning);
-
-        HealthStatus status = databaseAvailable && executorRunning
-                ? HealthStatus.HEALTHY
-                : HealthStatus.UNHEALTHY;
-
-        HealthReport healthReport = new HealthReport(
-                getServiceName(),
+        return new HealthReport(
+                "DatabaseService",
                 status,
-                databaseAvailable && executorRunning
-                        ? "Database service operational"
-                        : "Database connection or threads unavailable",
+                message,
                 Instant.now(),
                 metrics
         );
+    }
 
-        ShellLogger.log("Report: " + healthReport + "\nHealth Check Ended for: " + this.getClass().getSimpleName());
-
-        return healthReport;
+    private boolean checkDatabaseConnection() {
+        try (Connection connection = dataSource.getConnection()) {
+            return connection.isValid(2);
+        } catch (SQLException e) {
+            return false;
+        }
     }
 }

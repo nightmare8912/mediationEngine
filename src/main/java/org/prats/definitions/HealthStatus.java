@@ -4,5 +4,12 @@ public enum HealthStatus {
     HEALTHY,
     DEGRADED,
     UNHEALTHY,
-    UNREACHABLE
+
+    UNREACHABLE,
+    INVALID,
+
+    RECOVERING,
+    RECOVERY_FAILED,
+
+    UNKNOWN
 }

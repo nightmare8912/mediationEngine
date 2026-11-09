@@ -1,14 +1,14 @@
 package org.prats.loggers;
 
 public class ShellLogger {
-    private static boolean isLogginEnabled = true;
+    private static boolean isLoggingEnabled = true;
 
-    public ShellLogger() {
-        isLogginEnabled = true;
-    }
+//    public ShellLogger() {
+//        isLoggingEnabled = true;
+//    }
 
     public static void log(String message) {
-        if (isLogginEnabled)
+        if (isLoggingEnabled)
             System.out.println(message);
     }
 }

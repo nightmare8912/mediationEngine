@@ -19,8 +19,7 @@ public class ClientConnection {
         );
     }
 
-    public synchronized void sendMessage(String message)
-            throws IOException {
+    public synchronized void sendMessage (String message) throws IOException {
         writer.write(message);
         writer.newLine();
         writer.flush();

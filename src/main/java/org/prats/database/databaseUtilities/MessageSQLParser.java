@@ -2,7 +2,7 @@ package org.prats.database.databaseUtilities;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.prats.database.databaseUtilities.sqlHelper.SQLQuery;
-import org.prats.definitions.MessageEntity;
+import org.prats.definitions.Message;
 import org.prats.definitions.Operation;
 
 import java.sql.ResultSet;
@@ -310,11 +310,11 @@ public class MessageSQLParser {
     }
 
     public SQLQuery createSQLFromMessage(
-            MessageEntity messageEntity
+            Message message
     ) {
 
-        Operation operation     = messageEntity.getMessage().getOperation();
-        JsonNode payload        = messageEntity.getMessage().getPayload();
+        Operation operation     = message.getOperation();
+        JsonNode payload        = message.getPayload();
 
         switch (operation) {
             case FETCH -> {
@@ -336,13 +336,5 @@ public class MessageSQLParser {
                 return processInvalid(payload);
             }
         }
-    }
-
-    public MessageEntity createMessageEntityFromDBResponse(int dbResult) {
-        return null; // pending
-    }
-
-    public MessageEntity createMessageEntityFromDBResponse(ResultSet resultSet) {
-        return null; // pending
     }
 }

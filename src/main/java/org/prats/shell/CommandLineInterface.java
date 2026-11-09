@@ -1,12 +1,11 @@
 package org.prats.shell;
 
-import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool;
+import org.prats.definitions.ContainerType;
 import org.prats.fileHanldingUtilities.configParser.FilePathParser;
 import org.prats.definitions.FilePath;
-import org.prats.database.h2Database.H2TableInitializer;
 import org.prats.fileHanldingUtilities.FileHandler;
 import org.prats.loggers.ShellLogger;
-import org.prats.platform.PlatformInitializer;
+import org.prats.refractoring.ContainerLauncher;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -15,14 +14,10 @@ import java.util.Scanner;
 
 public class CommandLineInterface {
 
-    private FileHandler fileHandler;
-    private PlatformInitializer platformInitializer;
-    private final HikariDBConnectionPool dbConnectionPool;
+    private final FileHandler fileHandler;
 
     public CommandLineInterface() {
         fileHandler         = new FileHandler();
-        platformInitializer = new PlatformInitializer();
-        dbConnectionPool    = new HikariDBConnectionPool();
     }
 
     public void displayWelcomeMessage(FilePath filePath) {
@@ -39,45 +34,31 @@ public class CommandLineInterface {
 
     public void displayExitMessage() {
         System.out.println("Exiting...");
+        System.exit(0);
     }
 
     public void createTablesFromConfig(FilePath filePath) {
-        ShellLogger.log("Creating tables...");
-        new H2TableInitializer().initializeDatabase(filePath.databaseConf());
+//        ShellLogger.log("Creating tables...");
+//        new H2TableInitializer().initializeDatabase(filePath.databaseConf());
     }
 
-    public void startPlatform(FilePath filePath) {
+    public void startContainer(FilePath filePath, ContainerType containerType) {
         ShellLogger.log("Starting platform...");
         try
         {
-            ShellLogger.log("" + platformInitializer.initializePlatform(new ArrayList<>(), filePath.platformConf()).pid());
-            ShellLogger.log("Started platform.");
+            ShellLogger.log("" + new ContainerLauncher().launchContainer(
+                    new ArrayList<>(),
+                    filePath.platformConf(),
+                    containerType
+            ).pid());
+            ShellLogger.log("Started " + containerType + ".");
         }
         catch (IOException ioe)
         {
-            ShellLogger.log("Unable to start platform..." + Arrays.toString(ioe.getStackTrace()));
+            ShellLogger.log("Unable to start: " + containerType + ".\n" + Arrays.toString(ioe.getStackTrace()));
         }
     }
 
-    public void shutdownPlatform(FilePath filePath) {
-//        int tcpPort;
-//        ShellLogger.log("Stopping platform...");
-//        try
-//        {
-//            tcpPort = new ConfigParser().initializePlatformConfigs(filePathDefinition.getPlatformConf()).getTcpPort();
-//            ShellLogger.log("Stopped platform.");
-//        }
-//        catch (IOException ioe)
-//        {
-//            ShellLogger.log("Unable to start platform..." + Arrays.toString(ioe.getStackTrace()));
-//        }
-    }
-
-    public void shutdownH2Database() {
-        ShellLogger.log("Shutting down H2 database...");
-        dbConnectionPool.shutdown();
-        ShellLogger.log("Killed H2 database...");
-    }
 
     public void launch() {
 
@@ -87,7 +68,7 @@ public class CommandLineInterface {
 
         displayWelcomeMessage(filePath);
 
-        while (!command.equals("meng kill")) {
+        while (!command.equals("meng exit")) {
             command = sc.nextLine();
 
             switch (command) {
@@ -97,17 +78,8 @@ public class CommandLineInterface {
                 case "meng exit" ->
                         displayExitMessage();
 
-                case "meng initialize h2db" ->
-                        createTablesFromConfig(filePath);
-
-                case "meng shutdown h2db" ->
-                        shutdownH2Database();
-
                 case "meng start platform" ->
-                        startPlatform(filePath);
-
-                case "meng shutdown platform" ->
-                        shutdownPlatform(filePath);
+                        startContainer(filePath, ContainerType.PLATFORM);
 
                 default ->
                         displayCommandNotFoundMessage(command);

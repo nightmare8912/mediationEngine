@@ -2,11 +2,12 @@ package org.prats.database.databaseUtilities.HikariDBConnectionPool;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.prats.database.hikariDatabasePooling.HikariDataBaseUtilities;
+import org.prats.refractoring.DatabaseConnectionPool;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 
-public class HikariDBConnectionPool {
+public class HikariDBConnectionPool implements DatabaseConnectionPool {
 
     private HikariDataSource dataSource;
 
