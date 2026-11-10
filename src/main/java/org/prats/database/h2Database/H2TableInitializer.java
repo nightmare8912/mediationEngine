@@ -7,7 +7,7 @@ import org.prats.definitions.Database;
 import org.prats.definitions.DatabaseTable;
 import org.prats.definitions.Table;
 import org.prats.definitions.TableField;
-import org.prats.refractoring.DatabaseConnectionPool;
+import org.prats.database.DatabaseConnectionPool;
 
 import java.sql.Connection;
 import java.sql.SQLException;

@@ -1,6 +1,6 @@
 package org.prats.registries;
 
-import org.prats.refractoring.PendingResponse;
+import org.prats.definitions.PendingDelivery;
 
 import java.util.List;
 import java.util.UUID;
@@ -8,7 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class RetryRegistry {
 
-    private final ConcurrentHashMap<UUID, PendingResponse> pendingResponses;
+    private final ConcurrentHashMap<UUID, PendingDelivery> pendingDeliveries;
     private final int maxRetries;
 
     public RetryRegistry(int maxRetries) {
@@ -20,57 +20,53 @@ public class RetryRegistry {
         }
 
         this.maxRetries         = maxRetries;
-        this.pendingResponses   = new ConcurrentHashMap<>();
+        this.pendingDeliveries  = new ConcurrentHashMap<>();
     }
 
-    public void add(PendingResponse pendingResponse) {
+    public boolean add(PendingDelivery pendingDelivery) {
 
-        if (!canRetry(pendingResponse)) {
-            return;
-        }
-
-        pendingResponses.putIfAbsent(
-                pendingResponse.getCorrelationId(),
-                pendingResponse
-        );
-    }
-
-    public PendingResponse get(UUID correlationId) {
-        return pendingResponses.get(correlationId);
-    }
-
-    public PendingResponse removeAndGet(UUID correlationId) {
-        return pendingResponses.remove(correlationId);
-    }
-
-    public boolean canRetry(PendingResponse pendingResponse) {
-
-        synchronized (pendingResponse) {
-            return pendingResponse.getRetryCount() < maxRetries;
-        }
-    }
-
-    public boolean registerRetryFailure(UUID correlationId) {
-
-        PendingResponse pendingResponse = pendingResponses.get(correlationId);
-
-        if (pendingResponse == null) {
+        if (!canRetry(pendingDelivery)) {
             return false;
         }
 
-        synchronized (pendingResponse) {
+        return pendingDeliveries.putIfAbsent(
+                pendingDelivery.getCorrelationId(),
+                pendingDelivery
+        ) == null;
+    }
 
-            if (pendingResponses.get(correlationId) != pendingResponse) {
+    public PendingDelivery get(UUID correlationId) {
+        return pendingDeliveries.get(correlationId);
+    }
+
+    public boolean remove(
+            UUID correlationId,
+            PendingDelivery pendingDelivery
+    ) {
+        return pendingDeliveries.remove(
+                correlationId,
+                pendingDelivery
+        );
+    }
+
+    public boolean canRetry(PendingDelivery pendingDelivery) {
+            return pendingDelivery.getRetryCount() < maxRetries;
+    }
+
+    public boolean registerRetryFailure(UUID correlationId) {
+        PendingDelivery pendingDelivery = pendingDeliveries.get(correlationId);
+        if (pendingDelivery == null) {
+            return false;
+        }
+        synchronized (pendingDeliveries) {
+            if (pendingDeliveries.get(correlationId) != pendingDelivery) {
                 return false;
             }
-
-            int retryCount = pendingResponse.incrementRetryCount();
-
+            int retryCount = pendingDelivery.incrementRetryCount();
             if (retryCount >= maxRetries) {
-                pendingResponses.remove(correlationId, pendingResponse);
+                pendingDeliveries.remove(correlationId, pendingDelivery);
                 return true;
             }
-
             return false;
         }
     }
@@ -79,7 +75,7 @@ public class RetryRegistry {
         return maxRetries;
     }
 
-    public List<PendingResponse> getAllFailures() {
-        return List.copyOf(pendingResponses.values());
+    public List<PendingDelivery> getAllFailures() {
+        return List.copyOf(pendingDeliveries.values());
     }
 }

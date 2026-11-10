@@ -5,14 +5,13 @@ import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConne
 import org.prats.database.h2Database.H2DatabaseResourceManager;
 import org.prats.definitions.ContainerType;
 import org.prats.definitions.ProcessType;
+import org.prats.forwarders.CommandForwarder;
 import org.prats.forwarders.DatabaseForwarder;
+import org.prats.handlers.CommandHandler;
 import org.prats.handlers.DatabaseRequestHandler;
 import org.prats.parsers.MessageParser;
 import org.prats.parsers.CommandParser;
-import org.prats.processors.CommandProcessor;
-import org.prats.processors.MessageProcessor;
-import org.prats.processors.RequestProcessor;
-import org.prats.processors.ResponseProcessor;
+import org.prats.processors.*;
 import org.prats.registries.ContainerServiceRegistry;
 import org.prats.registries.CorrelationRegistry;
 import org.prats.registries.RetryRegistry;
@@ -27,6 +26,16 @@ import org.prats.services.tcpService.TCPService;
 import java.util.List;
 import java.util.Set;
 
+
+// this initializes the container service which is the parent service.
+// even though it is parent it doesnt know which services do what and they are responsible for what
+// it's primary responsibility is to manage the lif-cycle of all the service that are in its service registry
+// in some cases where it sees all its services are failing, it can decide to kill itself
+// which will include clearing its registries and initializing again
+// if this doesnt work, and if the container service is not a platform jvm,
+// the platform jvm which is parent of all container jvms can kill the affected jvm and re-create it
+// i.e, restart the entire jvm along with all its services
+
 public class ContainerInitializer {
 
     private ContainerService containerService;
@@ -36,6 +45,7 @@ public class ContainerInitializer {
     private String containerName;
     private ServiceRegistry serviceRegistry;
 
+    // reading all the params that were used to launch this jvm
     private void setParametersFromArgs(String[] args) {
         for (String arg: args) {
             if (arg.startsWith("--tcp-port=")) {
@@ -65,6 +75,7 @@ public class ContainerInitializer {
         }
     }
 
+    // initializing all services and injecting dependencies, only the initializer knows dependencies, not the services :)
     private void initializeServiceRegistryAndDependencies() {
 
         ProcessType processType                             = containerType == ContainerType.PLATFORM ? ProcessType.PLATFORM : ProcessType.EC;
@@ -75,8 +86,9 @@ public class ContainerInitializer {
 
         RetryRegistry retryRegistry                         = new RetryRegistry(5);
 
-        ResponseProcessor responseProcessor                 = new ResponseProcessor(correlationRegistry, retryRegistry, messageParser);
-        CommandProcessor commandProcessor                   = new CommandProcessor(commandParser, responseProcessor, Set.of("status", "restart services"));
+        ResponseProcessor responseProcessor                 = new ResponseProcessor(messageParser, correlationRegistry, retryRegistry);
+        CommandProcessor commandProcessor                   = new CommandProcessor(commandParser, responseProcessor, Set.of("status", "get health report" , "restart services all", "shutdown services all", "kill"));
+
 
         HikariDBConnectionPool hikariDBConnectionPool       = new HikariDBConnectionPool();
         H2DatabaseResourceManager h2DatabaseResourceManager = new H2DatabaseResourceManager(databaseConfigFile, hikariDBConnectionPool);
@@ -91,7 +103,9 @@ public class ContainerInitializer {
         RequestProcessor requestProcessor                   = new RequestProcessor(correlationRegistry, messageParser, commandProcessor, messageProcessor);
 
         MessageService messageService                       = new MessageService(coreThreads, maxThreads, idleTimeout, 5, 15, 200, 120, requestProcessor, responseProcessor);
-        TCPService tcpService                               = new TCPService(coreThreads, maxThreads, idleTimeout, tcpPort, tcpBacklog, containerName, List.of(), messageService, messageParser);
+
+        TCPProcessor tcpProcessor                           = new TCPProcessor(messageService, messageParser);
+        TCPService tcpService                               = new TCPService(coreThreads, maxThreads, idleTimeout, tcpPort, tcpBacklog, containerName, List.of(), tcpProcessor);
 
         serviceRegistry                                     = new ContainerServiceRegistry();
         HealthService   healthService                       = new HealthService(serviceRegistry, 100, 75);
@@ -118,6 +132,14 @@ public class ContainerInitializer {
                 this
         );
 
+        CommandForwarder commandForwarder                   = new CommandForwarder(containerService);
+        CommandHandler commandHandler                       = new CommandHandler(containerService, commandParser);
+
+        messageProcessor.setCommandForwarder(commandForwarder);
+
+        containerService.setCommandHandler(commandHandler);
+        containerService.setMessageDispatcher(messageService);
+
         healthService.setServiceFailureReporter(containerService);
 
         serviceRegistry.registerService(databaseService);
@@ -126,14 +148,6 @@ public class ContainerInitializer {
         serviceRegistry.registerService(healthService);
     }
 
-    // this initializes the container service which is the parent service.
-    // even though it is parent it doesnt know which services do what and they are responsible for what
-    // it's primary responsibility is to manage the lif-cycle of all the service that are in its service registry
-    // in some cases where it sees all its services are failing, it can decide to kill itself
-    // which will include clearing its registries and initializing again
-    // if this doesnt work, and if the container service is not a platform jvm,
-    // the platform jvm which is parent of all container jvms can kill the affected jvm and re-create it
-    // i.e, restart the entire jvm along with all its services
     private void initializeContainer(String[] args) {
 
         setParametersFromArgs(args);

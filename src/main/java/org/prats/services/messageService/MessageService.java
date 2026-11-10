@@ -1,21 +1,19 @@
 
 package org.prats.services.messageService;
 
-import org.prats.definitions.HealthCheckable;
-import org.prats.definitions.HealthReport;
-import org.prats.definitions.HealthStatus;
-import org.prats.definitions.Message;
-import org.prats.refractoring.PendingResponse;
+import org.prats.definitions.*;
 import org.prats.registries.CorrelationRegistry;
 import org.prats.replyChannels.ReplyChannel;
 import org.prats.registries.RetryRegistry;
 import org.prats.processors.RequestProcessor;
 import org.prats.processors.ResponseProcessor;
+import org.prats.services.MessageDispatcher;
 import org.prats.services.Service;
 import org.prats.threading.ThreadPool;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -192,18 +190,22 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
 
     private void retryFailedResponses() {
 
-        for (PendingResponse pendingResponse : retryRegistry.getAllFailures()) {
+        for (PendingDelivery pendingDelivery : retryRegistry.getAllFailures()) {
 
-            if (pendingResponse.tryStartRetry()) {
-                dispatchResponse(pendingResponse.getResponse());
+            if (pendingDelivery.tryStartRetry()) {
+                dispatchResponse(pendingDelivery.getResponse());
             }
         }
     }
 
     private void cleanExpiredCorrelations() {
-        for(UUID expiredUUID: correlationRegistry.getExpiredUUIDs(correlationTimeout)) {
-            retryRegistry.removeAndGet(expiredUUID);
-            correlationRegistry.removeAndGet(expiredUUID);
+        List<CorrelationRegistry.ExpiredCorrelation> expired =
+                correlationRegistry.removeExpired(correlationTimeout);
+        for (CorrelationRegistry.ExpiredCorrelation entry : expired) {
+            responseProcessor.processExpiry(
+                    entry.correlationId(),
+                    entry.replyChannel()
+            );
         }
     }
 
@@ -243,15 +245,15 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
     // handled by request processor
     @Override
     public void dispatchRequest(
-            String message,
+            Message message,
             ReplyChannel replyChannel
     ) {
         synchronized (admissionLock) {
             if (isQuiescing) {
                 rejectedDuringQuiesce.incrementAndGet();
-//                throw new RejectedExecutionException(
-//                        "MessageService is quiescing"
-//                );
+                throw new RejectedExecutionException(
+                        "MessageService is quiescing"
+                );
             }
             // request forwarded to request processor
             submitToThreadPool(

@@ -1,177 +1,215 @@
 package org.prats.processors;
 
 import org.prats.definitions.Message;
-import org.prats.definitions.Operation;
-import org.prats.parsers.MessageParser;
+import org.prats.definitions.MessageType;
+import org.prats.definitions.PendingDelivery;
 import org.prats.loggers.ShellLogger;
-import org.prats.refractoring.PendingResponse;
+import org.prats.parsers.MessageParser;
 import org.prats.registries.CorrelationRegistry;
 import org.prats.registries.RetryRegistry;
 import org.prats.replyChannels.ReplyChannel;
 
+import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 
 public class ResponseProcessor {
 
     private final CorrelationRegistry correlationRegistry;
-    private final MessageParser messageParser;
     private final RetryRegistry retryRegistry;
+    private final MessageParser messageParser;
 
     public ResponseProcessor(
+            MessageParser messageParser,
             CorrelationRegistry correlationRegistry,
-            RetryRegistry retryRegistry,
-            MessageParser messageParser
+            RetryRegistry retryRegistry
     ) {
+        this.messageParser          = messageParser;
         this.correlationRegistry    = correlationRegistry;
         this.retryRegistry          = retryRegistry;
-        this.messageParser          = messageParser;
-    }
-
-    public void process(Message message) {
-        // check if pending response is already created, which means a prev delivery was attempted
-        PendingResponse pendingResponse =
-                retryRegistry.get(message.getCorrelationId());
-
-        // get the reply channel
-        ReplyChannel replyChannel = pendingResponse != null
-                ? pendingResponse.getReplyChannel()
-                : correlationRegistry.get(message.getCorrelationId());
-
-        process(message, replyChannel, pendingResponse);
     }
 
     public void process(Message message, ReplyChannel replyChannel) {
-
-        PendingResponse pendingResponse =
-                retryRegistry.get(message.getCorrelationId());
-
-        if (pendingResponse != null) {
-            replyChannel = pendingResponse.getReplyChannel();
-        }
-
-        process(message, replyChannel, pendingResponse);
+        attemptDelivery(
+                message, replyChannel
+        );
     }
 
-    private void process(
-            Message message,
-            ReplyChannel replyChannel,
-            PendingResponse pendingResponse
-    ) {
-
-        // cannot respond if reply channel is null
+    // for first time deliveries
+    public void process(Message response) {
+        UUID correlationId = response.getCorrelationId();
+        ReplyChannel replyChannel =
+                correlationRegistry.removeAndGet(correlationId);
         if (replyChannel == null) {
             ShellLogger.log(
-                    "No ReplyChannel found for correlation ID: "
-                            + message.getCorrelationId()
+                    "No pending request found for correlation ID: "
+                            + correlationId
             );
+            return;
+        }
+        attemptDelivery(response, replyChannel);
+    }
+
+    // attempt to deliver on the reply channel
+    private void attemptDelivery(
+            Message response,
+            ReplyChannel replyChannel
+    ) {
+        try {
+            CompletionStage<Void> delivery =
+                    replyChannel.sendReply(response);
+            if (delivery == null) {
+                throw new IllegalStateException(
+                        "ReplyChannel returned a null CompletionStage"
+                );
+            }
+            delivery.whenComplete((result, exception) -> {
+                if (exception == null) {
+                    ShellLogger.log(
+                            "Response delivered successfully: "
+                                    + response.getCorrelationId()
+                    );
+                } else {
+                    handleInitialDeliveryFailure(
+                            response,
+                            replyChannel,
+                            unwrap(exception)
+                    );
+                }
+            });
+        } catch (Exception exception) {
+            handleInitialDeliveryFailure(
+                    response,
+                    replyChannel,
+                    exception
+            );
+        }
+    }
+
+    // in case of delivery failure
+    private void handleInitialDeliveryFailure(
+            Message response,
+            ReplyChannel replyChannel,
+            Throwable exception
+    ) {
+        UUID correlationId = response.getCorrelationId();
+        ShellLogger.log(
+                "Initial response delivery failed for "
+                        + correlationId + ": "
+                        + exception.getMessage()
+        );
+        PendingDelivery pendingDelivery = new PendingDelivery(
+                correlationId,
+                response,
+                replyChannel
+        );
+        if (!retryRegistry.add(pendingDelivery)) {
+            ShellLogger.log(
+                    "Unable to register response for retry: "
+                            + correlationId
+            );
+        }
+    }
+
+    public void retry(PendingDelivery pendingDelivery) {
+
+        UUID correlationId = pendingDelivery.getCorrelationId();
+
+        if (!pendingDelivery.tryStartRetry()) {
             return;
         }
 
         try {
-
-            String reply;
-            // parse json replies for operations that didnt come from shell
-            if (message.getOperation() != Operation.COMMAND) {
-                reply = messageParser.createJSONFromMessage(message);
-            } else {
-                // for shell we pass non-json replies
-                reply = messageParser.extractPayloadField(message, "body");
+            if (retryRegistry.get(correlationId) != pendingDelivery) {
+                return;
             }
-
-            // send the reply and check if it is completed
             CompletionStage<Void> delivery =
-                    replyChannel.sendReply(reply);
-
+                    pendingDelivery.getReplyChannel()
+                            .sendReply(pendingDelivery.getResponse());
             if (delivery == null) {
                 throw new IllegalStateException(
                         "ReplyChannel returned a null CompletionStage"
                 );
             }
 
-            // when delivery is complete, this runs, it can either be a success or an error
             delivery.whenComplete((result, exception) -> {
-                if (exception == null) {
-                    // if it is success we clear correlation
-                    correlationRegistry.removeAndGet(
-                            message.getCorrelationId()
-                    );
-                    // and the retry, as it may have something, we dont want duplicate delivery
-                    retryRegistry.removeAndGet(
-                            message.getCorrelationId()
-                    );
-                } else {
-                    // case when delivery was not success
-                    handleDeliveryFailure(
-                            message,
-                            replyChannel,
-                            pendingResponse,
-                            exception
-                    );
+                try {
+                    if (exception == null) {
+                        retryRegistry.remove(
+                                correlationId,
+                                pendingDelivery
+                        );
+                        ShellLogger.log(
+                                "Response retry delivered successfully: "
+                                        + correlationId
+                        );
+                    } else {
+                        handleRetryFailure(
+                                pendingDelivery,
+                                unwrap(exception)
+                        );
+                    }
+                } finally {
+                    pendingDelivery.finishRetry();
                 }
             });
-
         } catch (Exception exception) {
-            // when we could not deliver
-            handleDeliveryFailure(
-                    message,
-                    replyChannel,
-                    pendingResponse,
-                    exception
+            try {
+                handleRetryFailure(
+                        pendingDelivery,
+                        exception
+                );
+            } finally {
+                pendingDelivery.finishRetry();
+            }
+        }
+    }
+    // failures of retires
+    private void handleRetryFailure(
+            PendingDelivery pendingDelivery,
+            Throwable exception
+    ) {
+
+        UUID correlationId = pendingDelivery.getCorrelationId();
+        ShellLogger.log(
+                "Response retry failed for "
+                        + correlationId + ": "
+                        + exception.getMessage()
+        );
+        boolean retryExhausted =
+                retryRegistry.registerRetryFailure(correlationId);
+        if (retryExhausted) {
+            ShellLogger.log(
+                    "Maximum retry limit ("
+                            + retryRegistry.getMaxRetries()
+                            + ") exhausted for correlation ID: "
+                            + correlationId
             );
         }
     }
 
-    private void handleDeliveryFailure(
-            Message message,
-            ReplyChannel replyChannel,
-            PendingResponse pendingResponse,
-            Throwable exception
-    ) {
+    private Throwable unwrap(Throwable exception) {
 
-        ShellLogger.log(
-                "Failed to deliver response: " + exception.getMessage()
-        );
-        // cases where the first delivery was attempted and it failed so an entry has to be made in the retry registry
-        if (pendingResponse == null) {
+        while ((exception instanceof CompletionException
+                || exception instanceof ExecutionException)
+                && exception.getCause() != null) {
 
-            PendingResponse newPendingResponse = new PendingResponse(
-                    message.getCorrelationId(),
-                    message,
-                    replyChannel
-            );
-            // add to retry registry
-            if (retryRegistry.canRetry(newPendingResponse)) {
-                retryRegistry.add(newPendingResponse);
-
-            } else {
-                // if it cannot retry we remove it from out correlation registry
-                correlationRegistry.removeAndGet(
-                        message.getCorrelationId()
-                );
-
-                ShellLogger.log(
-                        "No retries configured for correlation ID: "
-                                + message.getCorrelationId()
-                );
-            }
-
-        } else {
-            // now this was not the first attempt, we check if we r eligible for more retries if not, the retry registry will remove the message from its memory
-            boolean retryExhausted = retryRegistry.registerRetryFailure(
-                    message.getCorrelationId()
-            );
-            // if retry is exhausted we remove from correlation registry
-            if (retryExhausted) {
-                correlationRegistry.removeAndGet(
-                        message.getCorrelationId()
-                );
-                ShellLogger.log(
-                        "Maximum retry limit ("
-                                + retryRegistry.getMaxRetries()
-                                + ") exhausted for correlation ID: "
-                                + message.getCorrelationId()
-                );
-            }
+            exception = exception.getCause();
         }
+
+        return exception;
+    }
+
+    public void processExpiry(UUID correlationId, ReplyChannel replyChannel) {
+
+        Message errorMessage = messageParser.createErrorMessage(
+                correlationId,
+                "TIMEOUT",
+                "There was an internal timeout while processing this request with correlation ID: " + correlationId
+        );
+        replyChannel.sendReply(
+                errorMessage
+        );
     }
 }

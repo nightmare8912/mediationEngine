@@ -4,12 +4,11 @@ package org.prats.services.tcpService;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.prats.definitions.*;
-import org.prats.parsers.MessageParser;
-import org.prats.replyChannels.ReplyChannel;
+import org.prats.processors.TCPProcessor;
 import org.prats.replyChannels.TCPReplyChannel;
 import org.prats.loggers.ShellLogger;
 import org.prats.services.databaseService.Submittable;
-import org.prats.services.messageService.MessageDispatcher;
+import org.prats.services.MessageDispatcher;
 import org.prats.services.Service;
 import org.prats.threading.ThreadPool;
 
@@ -38,8 +37,7 @@ public class TCPService implements Service, Submittable, HealthCheckable {
     private static final int CONNECT_TIMEOUT_MILLIS = 5000;
     private static final int HANDSHAKE_TIMEOUT_MILLIS = 5000;
 
-    private final MessageDispatcher messageDispatcher;
-    private final MessageParser messageParser;
+    private final TCPProcessor tcpProcessor;
     private final Object admissionLock;
 
     private final int coreThreads;
@@ -66,14 +64,10 @@ public class TCPService implements Service, Submittable, HealthCheckable {
     private final AtomicLong clientReadFailures = new AtomicLong();
     private final AtomicLong acceptFailures = new AtomicLong();
 
-    private final AtomicLong requestsReceived = new AtomicLong();
-    private final AtomicLong requestsDispatched = new AtomicLong();
-    private final AtomicLong rejectedMessageDispatches = new AtomicLong();
-
-    private final AtomicLong repliesSubmitted = new AtomicLong();
-    private final AtomicLong repliesSent = new AtomicLong();
-    private final AtomicLong replyWriteFailures = new AtomicLong();
-    private final AtomicLong replyWriteRejections = new AtomicLong();
+    private final AtomicLong messagesSubmitted = new AtomicLong();
+    private final AtomicLong messagesSent = new AtomicLong();
+    private final AtomicLong messagesFailures = new AtomicLong();
+    private final AtomicLong messagesRejection = new AtomicLong();
 
     private final AtomicLong submittedTasks = new AtomicLong();
     private final AtomicLong completedTasks = new AtomicLong();
@@ -96,8 +90,7 @@ public class TCPService implements Service, Submittable, HealthCheckable {
             int tcpBacklog,
             String processName,
             List<TCPPeer> peersToConnect,
-            MessageDispatcher messageDispatcher,
-            MessageParser messageParser
+            TCPProcessor tcpProcessor
     ) {
         this.coreThreads        = coreThreads;
         this.maxThreads         = maxThreads;
@@ -107,8 +100,7 @@ public class TCPService implements Service, Submittable, HealthCheckable {
         this.processName        = processName;
 
         this.peersToConnect     = peersToConnect;
-        this.messageDispatcher  = messageDispatcher;
-        this.messageParser      = messageParser;
+        this.tcpProcessor       = tcpProcessor;
 
         this.isQuiescing        = true;
 
@@ -162,7 +154,6 @@ public class TCPService implements Service, Submittable, HealthCheckable {
         while (!isQuiescing) {
             Socket clientSocket = null;
             try {
-
                 clientSocket = serverSocket.accept();
                 acceptedConnections.incrementAndGet();
                 clientSocket.setKeepAlive(true);
@@ -172,20 +163,16 @@ public class TCPService implements Service, Submittable, HealthCheckable {
                         closeQuietly(clientSocket);
                         break;
                     }
-
                     activeConnections.add(clientSocket);
                     Socket acceptedSocket = clientSocket;
                     try {
                         submitToThreadPool(
                                 () -> acceptClient(acceptedSocket)
                         );
-
                     } catch (RejectedExecutionException exception) {
-
                         connectionTaskRejections.incrementAndGet();
                         activeConnections.remove(acceptedSocket);
                         closeQuietly(acceptedSocket);
-
                         ShellLogger.log(
                                 "[TCPService] Connection rejected: "
                                         + exception.getMessage()
@@ -194,7 +181,6 @@ public class TCPService implements Service, Submittable, HealthCheckable {
                 }
 
             } catch (IOException exception) {
-
                 if (!isQuiescing) {
                     acceptFailures.incrementAndGet();
                     ShellLogger.log(
@@ -202,7 +188,6 @@ public class TCPService implements Service, Submittable, HealthCheckable {
                                     + exception.getMessage()
                     );
                 }
-
                 break;
             }
         }
@@ -218,48 +203,36 @@ public class TCPService implements Service, Submittable, HealthCheckable {
     }
 
     private void establishPeerConnection(TCPPeer peer) {
-
         Socket socket = new Socket();
         ClientConnection clientConnection = null;
-
         boolean connectionEstablished = false;
-
         try {
-
             if (isQuiescing) {
                 return;
             }
-
             socket.connect(
                     new InetSocketAddress(peer.host(), peer.port()),
                     CONNECT_TIMEOUT_MILLIS
             );
-
             socket.setKeepAlive(true);
-
             clientConnection = new ClientConnection(socket);
-
             synchronized (admissionLock) {
-
                 if (isQuiescing) {
                     throw new IOException(
                             "TCP service is shutting down"
                     );
                 }
-
                 ClientConnection existingConnection =
                         peerConnections.putIfAbsent(
                                 peer.processId(),
                                 clientConnection
                         );
-
                 if (existingConnection != null) {
                     throw new IOException(
                             "Connection already exists for peer: "
                                     + peer.processId()
                     );
                 }
-
                 activeConnections.add(socket);
                 ClientConnection establishedConnection = clientConnection;
                 submitToThreadPool(() -> {
@@ -328,7 +301,6 @@ public class TCPService implements Service, Submittable, HealthCheckable {
     }
 
     private void acceptClient(Socket clientSocket) {
-
         try {
             ClientConnection connection =
                     new ClientConnection(clientSocket);
@@ -346,10 +318,6 @@ public class TCPService implements Service, Submittable, HealthCheckable {
     }
 
     private void handleClient(ClientConnection clientConnection) {
-        ReplyChannel replyChannel = new TCPReplyChannel(
-                clientConnection,
-                this
-        );
         try (
                 Socket socket = clientConnection.getSocket();
                 BufferedReader reader = new BufferedReader(
@@ -359,62 +327,69 @@ public class TCPService implements Service, Submittable, HealthCheckable {
                         )
                 )
         ) {
-            String message;
-            while (!isQuiescing && (message = reader.readLine()) != null) {
-                requestsReceived.incrementAndGet();
+            String rawMessage;
+            while (!isQuiescing && (rawMessage = reader.readLine()) != null) {
+                // messagesReceived.incrementAndGet();
                 try {
-                    messageDispatcher.dispatchRequest(
-                            message,
-                            replyChannel
+                    tcpProcessor.processIncoming(
+                            rawMessage,
+                            request -> new TCPReplyChannel(
+                                    clientConnection,
+                                    this
+                            )
                     );
-                    requestsDispatched.incrementAndGet();
+                    messagesSubmitted.incrementAndGet();
                 } catch (RejectedExecutionException exception) {
-                    rejectedMessageDispatches.incrementAndGet();
-                    throw exception;
+                    messagesRejection.incrementAndGet();
+                    ShellLogger.log(
+                            "[TCPService] Message submission rejected: "
+                                    + exception.getMessage()
+                    );
+                } catch (Exception exception) {
+                    ShellLogger.log(
+                            "[TCPService] Failed to process incoming message: "
+                                    + exception.getMessage()
+                    );
                 }
             }
         } catch (IOException exception) {
             clientReadFailures.incrementAndGet();
-
             if (!isQuiescing) {
                 ShellLogger.log(
                         "[TCPService] [handleClient] Client read failed: "
                                 + exception.getMessage()
                 );
             }
-        } catch (RejectedExecutionException exception) {
-
-            ShellLogger.log(
-                    "[TCPService] [handleClient] Message submission rejected: "
-                            + exception.getMessage()
-            );
-
         }
     }
 
-    // sends the reply back to the client using the client connection
-    public CompletableFuture<Void> sendReply(
-            String response,
+    // sends the message to the client using the client connection
+    public CompletableFuture<Void> writeMessage(
+            Message message,
             ClientConnection clientConnection
     ) {
         CompletableFuture<Void> completion = new CompletableFuture<>();
         try {
-            submitToThreadPool(
-                    () -> {
-                        try {
-                            clientConnection.sendMessage(response);
-                            repliesSent.incrementAndGet();
-                            completion.complete(null);
-                        } catch (IOException exception) {
-                            replyWriteFailures.incrementAndGet();
-                            ShellLogger.log(exception.getMessage());
-                            completion.completeExceptionally(exception);
-                        }
-                    }
-            );
-            repliesSubmitted.incrementAndGet();
+            submitToThreadPool(() -> {
+                try {
+                    tcpProcessor.processOutgoing(
+                            message,
+                            clientConnection
+                    );
+                    messagesSent.incrementAndGet();
+                    completion.complete(null);
+                } catch (Exception exception) {
+                    messagesFailures.incrementAndGet();
+                    completion.completeExceptionally(exception);
+                    ShellLogger.log(
+                            "[TCPService] Message write failed: "
+                                    + exception.getMessage()
+                    );
+                }
+            });
+            messagesSubmitted.incrementAndGet();
         } catch (RejectedExecutionException exception) {
-            replyWriteRejections.incrementAndGet();
+            messagesRejection.incrementAndGet();
             completion.completeExceptionally(exception);
         }
         return completion;
@@ -459,7 +434,8 @@ public class TCPService implements Service, Submittable, HealthCheckable {
 
     // checks for outstanding requests, if something is pending
     private boolean hasOutstandingWork() {
-        return outstandingTasks.get() > 0;
+//        return outstandingTasks.get() > 0;
+        return true;
     }
 
     @Override
@@ -508,15 +484,10 @@ public class TCPService implements Service, Submittable, HealthCheckable {
                 clientReadFailures.get());
         metrics.put("acceptFailures", acceptFailures.get());
 
-        metrics.put("requestsReceived", requestsReceived.get());
-        metrics.put("requestsDispatched", requestsDispatched.get());
-        metrics.put("rejectedMessageDispatches",
-                rejectedMessageDispatches.get());
-
-        metrics.put("repliesSubmitted", repliesSubmitted.get());
-        metrics.put("repliesSent", repliesSent.get());
-        metrics.put("replyWriteFailures", replyWriteFailures.get());
-        metrics.put("replyWriteRejections", replyWriteRejections.get());
+        metrics.put("messagesSubmitted", messagesSubmitted.get());
+        metrics.put("messagesSent", messagesSent.get());
+        metrics.put("messagesFailures", messagesFailures.get());
+        metrics.put("messagesRejection", messagesRejection.get());
 
         metrics.put("submittedTasks", submittedTasks.get());
         metrics.put("completedTasks", completedTasks.get());
@@ -555,19 +526,13 @@ public class TCPService implements Service, Submittable, HealthCheckable {
             boolean newAcceptFailures =
                     acceptFailures.get() > lastReportedAcceptFailures;
 
-            boolean newDispatchRejections =
-                    rejectedMessageDispatches.get() >
-                            lastReportedDispatchRejections;
-
             lastReportedFailedTasks = failedTasks.get();
             lastReportedRejectedTasks = rejectedTasks.get();
             lastReportedAcceptFailures = acceptFailures.get();
-            lastReportedDispatchRejections = rejectedMessageDispatches.get();
 
             if (newTaskFailures ||
                     newTaskRejections ||
-                    newAcceptFailures ||
-                    newDispatchRejections) {
+                    newAcceptFailures) {
 
                 status = HealthStatus.DEGRADED;
                 message = "TCP service is operational but has experienced task failures, connection acceptance failures or message dispatch rejections.";
@@ -609,16 +574,17 @@ public class TCPService implements Service, Submittable, HealthCheckable {
                                 "Recipient ID is required for TCP submission"
                         );
                     }
-                    ClientConnection connection =
+                    ClientConnection clientConnection =
                             peerConnections.get(recipientId);
-                    if (connection == null) {
+                    if (clientConnection == null) {
                         throw new IOException(
                                 "No active connection found for peer: " + recipientId
                         );
                     }
-                    String jsonMessage =
-                            messageParser.createJSONFromMessage(message);
-                    connection.sendMessage(jsonMessage);
+                    tcpProcessor.processOutgoing(
+                            message,
+                            clientConnection
+                    );
                     completion.complete(null);
                 } catch (Exception exception) {
                     completion.completeExceptionally(exception);
@@ -659,43 +625,87 @@ public class TCPService implements Service, Submittable, HealthCheckable {
         return response;
     }
 
+    private void handleSubmissionFailure(
+            Message message,
+            Throwable exception
+    ) {
+
+        ShellLogger.log(
+                "[TCPService] Failed to send message to peer "
+                        + message.getRecipientID() + ": "
+                        + exception.getMessage()
+        );
+
+        // only outbound requests have a local requester waiting
+        // for the result. so we generate a correlated transport failure
+        // response so MessageService can notify that requester.
+
+        if (message.getMessageType() != MessageType.REQUEST) {
+            return;
+        }
+
+        try {
+            Message failureResponse =
+                    createTransportFailureResponse(
+                            message,
+                            exception
+                    );
+            tcpProcessor.processTCPRejection(
+                    failureResponse
+            );
+
+        } catch (Exception dispatchException) {
+
+            ShellLogger.log(
+                    "[TCPService] Failed to dispatch transport failure: "
+                            + dispatchException.getMessage()
+            );
+        }
+    }
+
     @Override
     public void submit(Message message) {
-
+        ClientConnection clientConnection = null;
+        Throwable submissionFailure = null;
         synchronized (admissionLock) {
             if (isQuiescing &&
                     (message.getMessageType() == MessageType.REQUEST ||
                             message.getMessageType() == MessageType.INFO)) {
-
                 rejectedTasks.incrementAndGet();
-
-                throw new IllegalStateException(
-                        "[TCPService] [submit] TCP Service is quiescing."
+                submissionFailure = new RejectedExecutionException(
+                        "TCP Service is quiescing."
                 );
-            }
-        }
 
-        if (message.getMessageType() == MessageType.REQUEST) {
-            sendRequestMessage(message).whenComplete((result, exception) -> {
-                if (exception != null) {
-                    ShellLogger.log(
-                            "[TCPService] Failed to send request to peer "
-                                    + message.getRecipientID() + ": "
-                                    + exception.getMessage()
+            } else {
+                String recipientID = message.getRecipientID();
+                if (recipientID == null || recipientID.isBlank()) {
+
+                    submissionFailure = new IllegalArgumentException(
+                            "Message recipient ID is missing."
                     );
-                    try {
-                        Message failureResponse =
-                                createTransportFailureResponse(message, exception);
-                        messageDispatcher.dispatchResponse(failureResponse);
-                    } catch (Exception dispatchException) {
-                        ShellLogger.log(
-                                "[TCPService] Failed to dispatch transport failure: "
-                                        + dispatchException.getMessage()
+                } else {
+
+                    clientConnection = peerConnections.get(recipientID);
+
+                    if (clientConnection == null) {
+                        submissionFailure = new IllegalStateException(
+                                "No active connection for peer: " + recipientID
                         );
                     }
                 }
-            });
+            }
         }
+        if (submissionFailure != null) {
+            handleSubmissionFailure(message, submissionFailure);
+            return;
+        }
+
+        writeMessage(message, clientConnection)
+                .whenComplete((result, exception) -> {
+
+                    if (exception != null) {
+                        handleSubmissionFailure(message, exception);
+                    }
+                });
     }
 }
-

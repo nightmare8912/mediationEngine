@@ -15,14 +15,14 @@ import java.sql.SQLException;
 
 public class DatabaseRequestHandler implements RequestHandler {
 
+    private final DatabaseResourceManager databaseResourceManager;
     private final MessageSQLParser messageSQLParser;
-    private final DataSource dataSource;
 
     public DatabaseRequestHandler(
             DatabaseResourceManager databaseResourceManager
     ) {
-        this.dataSource         = databaseResourceManager.getDataSource();
-        this.messageSQLParser   = new MessageSQLParser();
+        this.databaseResourceManager    = databaseResourceManager;
+        this.messageSQLParser           = new MessageSQLParser();
     }
 
     public ResultSet executeQuery(SQLQuery sqlQuery, Connection connection) {
@@ -46,25 +46,37 @@ public class DatabaseRequestHandler implements RequestHandler {
     }
 
     private Message handleQuery(Message message, SQLQuery sqlQuery) {
-        try (
-            Connection connection = dataSource.getConnection();
-        ) {
-            return  parseDatabaseQueryResponseToMessage(message, executeQuery(sqlQuery, connection));
+        DataSource dataSource = databaseResourceManager.getDataSource();
+        try (Connection connection = dataSource.getConnection()) {
+            return parseDatabaseQueryResponseToMessage(
+                    message,
+                    executeQuery(sqlQuery, connection)
+            );
         } catch (SQLException sqlException) {
-            ShellLogger.log("[DatabaseRequestHandler] [handleQuery], Exception: " + sqlException.getMessage());
+            ShellLogger.log(
+                    "[DatabaseRequestHandler] [handleQuery], Exception: "
+                            + sqlException.getMessage()
+            );
         }
-        return null; // todo: return proper error here
+        return null; // TODO: return proper error response
     }
 
     private Message handleUpdate(Message message, SQLQuery sqlQuery) {
-        try (
-            Connection connection = dataSource.getConnection();
-        ) {
-            return  parseDatabaseUpdateResponseToMessageEntity(message,   executeUpdate(sqlQuery, connection));
+        DataSource dataSource = databaseResourceManager.getDataSource();
+        try (Connection connection = dataSource.getConnection()) {
+
+            return parseDatabaseUpdateResponseToMessageEntity(
+                    message,
+                    executeUpdate(sqlQuery, connection)
+            );
         } catch (SQLException sqlException) {
-            ShellLogger.log("[DatabaseRequestHandler] [handleQuery], Exception: " + sqlException.getMessage());
+
+            ShellLogger.log(
+                    "[DatabaseRequestHandler] [handleUpdate], Exception: "
+                            + sqlException.getMessage()
+            );
         }
-        return null; // todo: return proper error here
+        return null; // TODO: return proper error response
     }
 
     @Override

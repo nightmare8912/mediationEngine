@@ -6,7 +6,8 @@ import org.prats.definitions.HealthCheckable;
 import org.prats.definitions.HealthReport;
 import org.prats.definitions.HealthStatus;
 import org.prats.definitions.Message;
-import org.prats.services.messageService.MessageDispatcher;
+import org.prats.loggers.ShellLogger;
+import org.prats.services.MessageDispatcher;
 import org.prats.handlers.DatabaseRequestHandler;
 import org.prats.services.Service;
 import org.prats.threading.ThreadPool;
@@ -17,6 +18,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -72,17 +74,38 @@ public class DatabaseService implements Service, Submittable, HealthCheckable {
 
     @Override
     public void start() {
-        databaseResourceManager.initialize();
-        dataSource  = databaseResourceManager.getDataSource();
 
-        databaseWorkers = new ThreadPool().initializeAndGetThreadPool(
-                coreThreads,
-                maxThreads,
-                idleTimeout,
-                false
-        );
-
-        isQuiescing = false;
+        try {
+            ShellLogger.log("[DatabaseService] Initializing database resources...");
+            databaseResourceManager.initialize();
+            ShellLogger.log("[DatabaseService] Database resources initialized.");
+            dataSource = Objects.requireNonNull(
+                    databaseResourceManager.getDataSource(),
+                    "Database DataSource was not initialized"
+            );
+            ShellLogger.log("[DatabaseService] DataSource acquired.");
+            databaseWorkers = new ThreadPool().initializeAndGetThreadPool(
+                    coreThreads,
+                    maxThreads,
+                    idleTimeout,
+                    false
+            );
+            ShellLogger.log("[DatabaseService] Worker executor initialized.");
+            synchronized (admissionLock) {
+                isQuiescing = false;
+            }
+            ShellLogger.log("[DatabaseService] Startup completed.");
+        } catch (Exception exception) {
+            isQuiescing = true;
+            ShellLogger.log(
+                    "[DatabaseService] Startup failed: " + exception
+            );
+            exception.printStackTrace();
+            throw new IllegalStateException(
+                    "DatabaseService initialization failed",
+                    exception
+            );
+        }
     }
 
     @Override
@@ -130,15 +153,6 @@ public class DatabaseService implements Service, Submittable, HealthCheckable {
                 // TODO: this is important, a message needs to be delivered back to the caller that the db service is not accepting work,
                 // otherwise, the calling service would not know what happened with their request
             }
-        }
-    }
-
-    public Connection getConnection() throws SQLException {
-        try {
-            return dataSource.getConnection();
-        } catch (SQLException e) {
-            connectionAcquisitionFailures.incrementAndGet();
-            throw e;
         }
     }
 

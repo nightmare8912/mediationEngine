@@ -1,4 +1,4 @@
-package org.prats.refractoring;
+package org.prats.database;
 
 import javax.sql.DataSource;
 

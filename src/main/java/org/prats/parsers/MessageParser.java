@@ -14,6 +14,9 @@ import org.prats.definitions.Operation;
 import org.prats.definitions.ProcessType;
 import org.prats.loggers.ShellLogger;
 
+import java.util.Objects;
+import java.util.UUID;
+
 public class MessageParser {
 
     private final ObjectMapper objectMapper;
@@ -135,6 +138,30 @@ public class MessageParser {
         return fieldValue.asText();
     }
 
+    public Message createErrorMessage(
+            UUID correlationId,
+            String errorCode,
+            String errorDescription
+    ) {
+        Objects.requireNonNull(correlationId, "Correlation ID cannot be null");
+        Objects.requireNonNull(errorCode, "Error code cannot be null");
+        Objects.requireNonNull(errorDescription, "Error description cannot be null");
+
+        ObjectNode payload = objectMapper.createObjectNode();
+
+        payload.put("errorCode", errorCode);
+        payload.put("errorDescription", errorDescription);
+
+        return new Message(
+                MessageType.RESPONSE,
+                processType,
+                Operation.INFO,
+                payload,
+                null,
+                null,
+                correlationId
+        );
+    }
 
     protected ObjectMapper getObjectMapper() {
         return objectMapper;

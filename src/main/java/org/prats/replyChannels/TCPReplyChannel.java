@@ -1,6 +1,6 @@
 package org.prats.replyChannels;
 
-import org.prats.definitions.ClientConnection;
+import org.prats.definitions.*;
 import org.prats.services.tcpService.TCPService;
 
 import java.util.concurrent.CompletionStage;
@@ -10,13 +10,19 @@ public class TCPReplyChannel implements ReplyChannel {
     private final ClientConnection clientConnection;
     private final TCPService tcpService;
 
-    public TCPReplyChannel(ClientConnection clientConnection, TCPService tcpService) {
-        this.clientConnection   = clientConnection;
-        this.tcpService         = tcpService;
+    public TCPReplyChannel(
+            ClientConnection clientConnection,
+            TCPService tcpService
+    ) {
+        this.clientConnection = clientConnection;
+        this.tcpService = tcpService;
     }
 
     @Override
-    public synchronized CompletionStage<Void> sendReply(String reply) throws Exception {
-        return tcpService.sendReply(reply, clientConnection);
+    public CompletionStage<Void> sendReply(Message response) {
+        return tcpService.writeMessage(
+                response,
+                clientConnection
+        );
     }
 }

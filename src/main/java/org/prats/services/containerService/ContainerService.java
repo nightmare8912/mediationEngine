@@ -1,25 +1,20 @@
 package org.prats.services.containerService;
 
 import org.prats.container.ContainerInitializer;
-import org.prats.definitions.ContainerType;
-import org.prats.definitions.HealthCheckable;
-import org.prats.definitions.HealthReport;
-import org.prats.definitions.HealthStatus;
+import org.prats.definitions.*;
+import org.prats.handlers.CommandHandler;
 import org.prats.loggers.ShellLogger;
 import org.prats.container.ContainerProcess;
-import org.prats.services.HealthReportAnalyzer;
-import org.prats.services.Service;
+import org.prats.services.*;
 import org.prats.registries.ServiceRegistry;
-import org.prats.services.ServiceFailureReporter;
 import org.prats.services.healthCheckService.HealthChecker;
 import org.prats.threading.ThreadPool;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.*;
 
 
 // the container service is a lifecycle manager of all the services that run inside the container(jvm),
@@ -28,11 +23,10 @@ import java.util.concurrent.ScheduledExecutorService;
 // however if that fails, it will ask the platform to kill itself and restart again
 // if that fails as well, the platform should be able to detect that container service unresponsive and
 // initiate its restart, only an external jvm which runs the platform jvm can kill this service
-public class ContainerService implements Service, ServiceFailureReporter, HealthCheckable {
+public class ContainerService implements Service, ServiceStatusReporter, CommandDispatcher, ServiceManager, HealthCheckable {
 
     private final ContainerType containerType;
     private final ServiceRegistry serviceRegistry;
-    private final ExecutorService containerWorkers;
     private final HealthChecker healthChecker;
     private final HealthReportAnalyzer healthReportAnalyzer;
     private final List<ContainerProcess> containerProcesses;
@@ -43,6 +37,10 @@ public class ContainerService implements Service, ServiceFailureReporter, Health
     private final String serviceName;
     private final String databaseConfigFile;
     private final Map<Service, Integer> failedServices;
+
+    private ExecutorService containerWorkers;
+    private CommandHandler commandHandler;
+    private MessageDispatcher messageDispatcher;
 
     private volatile ScheduledExecutorService scheduledThread;
 
@@ -82,10 +80,14 @@ public class ContainerService implements Service, ServiceFailureReporter, Health
 
         this.failedServices         = new ConcurrentHashMap<>();
         this.recentFailureReports   = new ConcurrentHashMap<>();
+    }
 
-        this.containerWorkers       = new ThreadPool().initializeAndGetThreadPool(
-                coreThreads, maxThreads, idleTimeout, true
-        );
+    public void setCommandHandler(CommandHandler commandHandler) {
+        this.commandHandler = commandHandler;
+    }
+
+    public void setMessageDispatcher(MessageDispatcher messageDispatcher) {
+        this.messageDispatcher = messageDispatcher;
     }
 
     // through this function  health services can report to the container service about the services that are not running
@@ -103,6 +105,12 @@ public class ContainerService implements Service, ServiceFailureReporter, Health
 
     @Override
     public void start() {
+        // start the container first
+        containerWorkers       = new ThreadPool().initializeAndGetThreadPool(
+                coreThreads, maxThreads, idleTimeout, true
+        );
+
+        // the services were inserted in an order in which we want them to start, and we iterate them and start in the same order
         for (Service service: serviceRegistry.getAllServices()) {
             try {
                 service.start();
@@ -112,9 +120,26 @@ public class ContainerService implements Service, ServiceFailureReporter, Health
                 // should not make other services not start as well. we expect that healthService will log this to
                 // container service and container service will do a recovery of the failed service later
                 // however i doubt how much that recovery would be useful
+                ShellLogger.log(
+                        "[ContainerService] Failed to start "
+                                + service.getClass().getSimpleName()
+                                + ": "
+                                + exception
+                );
+
+                exception.printStackTrace();
             }
         }
 
+        scheduledThread = new ScheduledThreadPoolExecutor(1);
+
+        // now we start check for health checker as it should have been started by now
+        scheduledThread.scheduleAtFixedRate(
+                this::triggerHealthCheckerHealthCheck,
+                0,
+                30,
+                TimeUnit.SECONDS
+        );
     }
 
     // the shutdown is in the reverse order of startup
@@ -123,22 +148,25 @@ public class ContainerService implements Service, ServiceFailureReporter, Health
         for (Service service: serviceRegistry.getAllServices().reversed()) {
             service.shutdown();
         }
+        containerWorkers.shutdownNow();
     }
 
     // orders all the services to stop accepting new work
     @Override
     public void quiesce() {
-        // draining the services in reverse order
+        // quiescing the services in reverse order
         for (Service service: serviceRegistry.getAllServices().reversed()) {
             service.quiesce();
         }
+        // the container service should be quiesced here
+
     }
 
     // gives every service some time to drain themselves
     @Override
     public void drain(long totalTimeout) {
         // draining the services in reverse order
-        long individualServiceTimeout = totalTimeout / serviceRegistry.getSize();
+        long individualServiceTimeout = totalTimeout / (serviceRegistry.getSize() + 1); // extra 1 for the container service
         for (Service service: serviceRegistry.getAllServices().reversed()) {
             service.drain(individualServiceTimeout);
         }
@@ -146,13 +174,17 @@ public class ContainerService implements Service, ServiceFailureReporter, Health
 
     // restarts the service within the given timeout
     private void restartService(Service service, long timeout) {
+
+        if (service == this) return; // cannot restart itself
+
         service.quiesce();      // stop accepting work
         service.drain(timeout); // drain accepted work
         service.shutdown();     // force shutdown
         service.start();        // start fresh
     }
 
-    //
+    // the healthChecker can monitor services in the service registry and report failures to container service
+    // after a certain threshold of failures, the container will attempt to restart the affected service
     @Override
     public void reportServiceFailure(
             Service service,
@@ -173,42 +205,150 @@ public class ContainerService implements Service, ServiceFailureReporter, Health
         recentFailureReports.remove(service);
     }
 
+    // someone needs to check the health of health checker right? container does it. so if health checker goes down
+    // the container service should do something as now we dnt know if our other services are running or not
+    // as container doesnt check individually, it relies on health service to report them to container.
     private HealthStatus checkHealthOfHealthChecker() {
-
         if (!(healthChecker instanceof Service service)) {
             return HealthStatus.UNKNOWN;
         }
-
         List<HealthReport> healthReports =
                 healthChecker.getRecentHealthReports(service);
 
-        if (healthReports == null || healthReports.isEmpty())
+        if (healthReports == null || healthReports.isEmpty()) {
             return HealthStatus.UNREACHABLE;
-
+        }
         return healthReportAnalyzer.analyze(healthReports);
     }
 
+    // scheduled thread triggers container thread to inspect health service
     private void triggerHealthCheckerHealthCheck() {
-        CompletableFuture
-                .supplyAsync(this::checkHealthOfHealthChecker, containerWorkers)
-                .thenAcceptAsync(this::evaluateHealthCheckerResponse, containerWorkers)
-                .exceptionally(exception -> {
-                    ShellLogger.log("Health checker health evaluation failed: "
-                            + exception.getMessage());
-                    return null;
-                });
+        submitToThreadPool(() -> {
+            try {
+                HealthStatus healthStatus = checkHealthOfHealthChecker();
+                evaluateHealthCheckerResponse(healthStatus);
+            } catch (Exception exception) {
+                ShellLogger.log(
+                        "Health checker health evaluation failed: "
+                                + exception.getMessage()
+                );
+            }
+        });
     }
 
+    // evaluating the response of health check and deciding if a restart is needed
     private void evaluateHealthCheckerResponse(HealthStatus healthStatus) {
-        Service service = (Service) healthChecker;
+        if (!(healthChecker instanceof Service service)) {
+            return;
+        }
+        if (healthStatus == HealthStatus.HEALTHY) {
+            failedServices.remove(service);
+            return;
+        }
+        if (healthStatus == HealthStatus.UNKNOWN) {
+            return;
+        }
         reportServiceFailure(service);
-
-        if (failedServices.get(service) > 3)
+        if (failedServices.getOrDefault(service, 0) > 3) {
             restartService(service, 1_000);
+        }
     }
 
     @Override
     public HealthReport checkHealth() {
         return null;
     }
+
+    @Override
+    public void dispatchCommand(Message command) {
+        submitToThreadPool(
+                () ->
+            messageDispatcher.dispatchResponse(commandHandler.handleCommand(
+                    command
+            ))
+        );
+    }
+
+    @Override
+    public void start(Service service) {
+
+    }
+
+    @Override
+    public void quiesce(Service service) {
+
+    }
+
+    @Override
+    public void drain(Service service) {
+
+    }
+
+    @Override
+    public void shutdown(Service service) {
+
+    }
+
+    @Override
+    public void restart(Service service) {
+
+    }
+
+    private void restartAllServices() {
+        List<Service> startupOrder =
+                new ArrayList<>(serviceRegistry.getAllServices());
+        List<Service> shutdownOrder =
+                new ArrayList<>(startupOrder);
+
+        Collections.reverse(shutdownOrder);
+
+        for (Service service : shutdownOrder) {
+            service.quiesce();
+        }
+
+        for (Service service : shutdownOrder) {
+            service.drain(5_000);
+        }
+
+        for (Service service : shutdownOrder) {
+            service.shutdown();
+        }
+
+        for (Service service : startupOrder) {
+            try {
+                service.start();
+
+                ShellLogger.log(
+                        "[ContainerService] Restarted "
+                                + service.getClass().getSimpleName()
+                );
+
+            } catch (Exception exception) {
+                ShellLogger.log(
+                        "[ContainerService] Restart failed for "
+                                + service.getClass().getSimpleName()
+                                + ": " + exception
+                );
+                exception.printStackTrace();
+            }
+        }
+    }
+
+    @Override
+    public void restartAll() {
+        submitToThreadPool(
+                this::restartAllServices
+        );
+    }
+
+    @Override
+    public List<HealthReport> getHealthReports(Service service) {
+        return healthChecker.getRecentHealthReports(service);
+    }
+
+    @Override
+    public List<HealthReport> getHealthReports() {
+        return healthChecker.getRecentHealthReports();
+    }
+
 }

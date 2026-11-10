@@ -1,9 +1,9 @@
-package org.prats.services.messageService;
+package org.prats.services;
 
 import org.prats.definitions.Message;
 import org.prats.replyChannels.ReplyChannel;
 
 public interface MessageDispatcher {
-    void dispatchRequest(String message, ReplyChannel replyChannel);
+    void dispatchRequest(Message message, ReplyChannel replyChannel);
     void dispatchResponse(Message message);
 }

@@ -1,7 +1,11 @@
 package org.prats.replyChannels;
 
+import org.prats.definitions.Message;
+
 import java.util.concurrent.CompletionStage;
 
 public interface ReplyChannel {
-    CompletionStage<Void> sendReply(String reply) throws Exception;
+
+    CompletionStage<Void> sendReply(Message response);
+
 }

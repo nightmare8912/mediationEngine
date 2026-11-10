@@ -4,7 +4,7 @@ import org.prats.definitions.HealthReport;
 
 import java.util.List;
 
-public interface ServiceFailureReporter {
+public interface ServiceStatusReporter {
 
     void reportServiceFailure(
             Service service,

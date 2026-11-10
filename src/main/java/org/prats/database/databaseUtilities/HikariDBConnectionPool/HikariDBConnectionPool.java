@@ -1,50 +1,78 @@
 package org.prats.database.databaseUtilities.HikariDBConnectionPool;
 
+import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import org.prats.database.hikariDatabasePooling.HikariDataBaseUtilities;
-import org.prats.refractoring.DatabaseConnectionPool;
+import org.prats.database.DatabaseConnectionPool;
 
-import java.sql.Connection;
-import java.sql.SQLException;
+import javax.sql.DataSource;
+import java.util.Objects;
 
 public class HikariDBConnectionPool implements DatabaseConnectionPool {
 
-    private HikariDataSource dataSource;
+    private volatile HikariDataSource dataSource;
 
-    public void initialize(
+    @Override
+    public synchronized void initialize(
             String url,
             String user,
             String pass,
-            long connectionTimeout,
+            long timeout,
             long idleTimeout,
-            int maxPoolSize
+            int maxConnections
     ) {
-        // null check of datasource to avoid re-creation
-        if (dataSource != null) return;
 
-        // initializing data source
-        dataSource = HikariDataBaseUtilities.initializeHikariSource(
-                url,
-                user,
-                pass,
-                connectionTimeout,
-                idleTimeout,
-                maxPoolSize
-        );
-        System.out.println("Initialized Hiakri Pool: " + dataSource.getDataSourceProperties());
+        Objects.requireNonNull(url, "Database URL cannot be null");
+        Objects.requireNonNull(user, "Database user cannot be null");
+        Objects.requireNonNull(pass, "Database password cannot be null");
+
+        if (dataSource != null && !dataSource.isClosed()) {
+            throw new IllegalStateException(
+                    "Connection pool is already initialized"
+            );
+        }
+
+        dataSource = null;
+
+        HikariConfig config = new HikariConfig();
+
+        config.setJdbcUrl(url);
+        config.setUsername(user);
+        config.setPassword(pass);
+
+        config.setConnectionTimeout(timeout);
+        config.setIdleTimeout(idleTimeout);
+        config.setMaximumPoolSize(maxConnections);
+
+        config.setPoolName("MediationEngine-H2-Pool");
+
+        HikariDataSource newDataSource = new HikariDataSource(config);
+
+        dataSource = newDataSource;
     }
 
-    public HikariDataSource getDataSource() {
-        return dataSource;
+    @Override
+    public DataSource getDataSource() {
+
+        HikariDataSource current = dataSource;
+
+        if (current == null || current.isClosed()) {
+            throw new IllegalStateException(
+                    "Hikari connection pool is not initialized"
+            );
+        }
+
+        return current;
     }
 
-    public Connection getConnection() throws SQLException {
-        return dataSource.getConnection();
-    }
+    @Override
+    public synchronized void shutdown() {
 
-    public void shutdown() {
-        if (dataSource != null) {
-            dataSource.close();
+        HikariDataSource current = dataSource;
+
+        dataSource = null;
+
+        if (current != null && !current.isClosed()) {
+            current.close();
         }
     }
 }

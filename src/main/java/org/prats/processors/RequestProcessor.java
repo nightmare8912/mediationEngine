@@ -28,11 +28,11 @@ public class RequestProcessor {
 
 
     public void process(
-            String request,
+            Message requestMessage,
             ReplyChannel replyChannel
     ) {
         // trying to parse the incoming message to our internal message structure
-        Message requestMessage = messageParser.createMessageFromJSON(request);
+        // Message requestMessage = messageParser.createMessageFromJSON(request);
 
         // if the parsing fails, assume it is a command and route it to command processor
         if (requestMessage.getOperation() == Operation.UNKNOWN && requestMessage.getMessageType() == MessageType.UNKNOWN) {

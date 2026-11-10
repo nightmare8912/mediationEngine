@@ -1,57 +1,88 @@
 package org.prats.database.h2Database;
 
 import org.prats.database.databaseUtilities.DatabaseResourceManager;
-import org.prats.refractoring.DatabaseConnectionPool;
+import org.prats.database.DatabaseConnectionPool;
 import org.prats.definitions.Database;
 import org.prats.fileHanldingUtilities.configParser.DatabaseConfigParser;
 
 import javax.sql.DataSource;
+import java.util.Objects;
 
 public class H2DatabaseResourceManager implements DatabaseResourceManager {
 
     private final DatabaseConnectionPool connectionPool;
     private final String databaseConfigFile;
 
+    private boolean initialized;
+
     public H2DatabaseResourceManager(
             String databaseConfigFile,
             DatabaseConnectionPool connectionPool
     ) {
-        this.databaseConfigFile = databaseConfigFile;
-        this.connectionPool = connectionPool;
+        this.databaseConfigFile = Objects.requireNonNull(databaseConfigFile);
+        this.connectionPool = Objects.requireNonNull(connectionPool);
     }
 
     @Override
-    public void initialize() {
+    public synchronized void initialize() {
 
-        Database database = new DatabaseConfigParser()
-                .initializeDatabaseConfig(databaseConfigFile);
+        if (initialized) {
+            throw new IllegalStateException(
+                    "Database resources are already initialized"
+            );
+        }
 
-        connectionPool.initialize(
-                database.url(),
-                database.user(),
-                database.pass(),
-                database.timeout(),
-                database.idleTimeout(),
-                database.maxConnections()
-        );
+        try {
+            Database database = new DatabaseConfigParser()
+                    .initializeDatabaseConfig(databaseConfigFile);
+
+            connectionPool.initialize(
+                    database.url(),
+                    database.user(),
+                    database.pass(),
+                    database.timeout(),
+                    database.idleTimeout(),
+                    database.maxConnections()
+            );
+
+            Objects.requireNonNull(
+                    connectionPool.getDataSource(),
+                    "DataSource initialization failed"
+            );
+
+            initialized = true;
+
+        } catch (RuntimeException exception) {
+
+            try {
+                connectionPool.shutdown();
+            } catch (RuntimeException cleanupException) {
+                exception.addSuppressed(cleanupException);
+            }
+
+            throw exception;
+        }
     }
 
     @Override
-    public void initialize(String databaseConfigFile) {
-        // If configuration is intended to be immutable,
-        // consider removing this overload.
-        throw new UnsupportedOperationException(
-                "Database configuration is already provided"
-        );
-    }
+    public synchronized DataSource getDataSource() {
 
-    @Override
-    public DataSource getDataSource() {
+        if (!initialized) {
+            throw new IllegalStateException(
+                    "Database resources have not been initialized"
+            );
+        }
+
         return connectionPool.getDataSource();
     }
 
     @Override
-    public void close() {
-        connectionPool.shutdown();
+    public synchronized void close() {
+
+        try {
+            connectionPool.shutdown();
+        } finally {
+            initialized = false;
+        }
     }
 }

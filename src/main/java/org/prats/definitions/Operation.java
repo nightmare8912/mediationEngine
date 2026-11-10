@@ -12,6 +12,7 @@ public enum Operation {
     STOP,
     RESTART,
     STATUS,
+    INFO,
 
     AUTHENTICATE,
     COMMAND,

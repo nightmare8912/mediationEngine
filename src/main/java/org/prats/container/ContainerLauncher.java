@@ -1,4 +1,4 @@
-package org.prats.refractoring;
+package org.prats.container;
 
 import org.prats.definitions.ContainerType;
 import org.prats.definitions.Platform;
@@ -30,6 +30,7 @@ public class ContainerLauncher {
                 containerAppArgs.add("--max-threads=" + platformDefinition.maxThreads());
                 containerAppArgs.add("--idle-timeout=" + platformDefinition.idleTimeout());
                 containerAppArgs.add("--core-idle-timeout=" + platformDefinition.coreIdleTimeout());
+                containerAppArgs.add("--database-conf=" + platformDefinition.databaseConfig());
                 containerAppArgs.add("--container-name=" + platformDefinition.id());
                 containerAppArgs.add("--container-type=" + containerType.name());
 

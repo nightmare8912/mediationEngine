@@ -2,52 +2,101 @@ package org.prats.registries;
 
 import org.prats.replyChannels.ReplyChannel;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 public class CorrelationRegistry {
+
     private final ConcurrentHashMap<UUID, CorrelationEntry> correlations;
 
     private record CorrelationEntry(
             ReplyChannel replyChannel,
-            Instant insertTime
+            long insertTimeNanos
+    ) {}
+
+    public record ExpiredCorrelation(
+            UUID correlationId,
+            ReplyChannel replyChannel
+    ) {}
+
+    private record ExpiredCandidate(
+            UUID correlationId,
+            CorrelationEntry entry
     ) {}
 
     public CorrelationRegistry() {
-        correlations    = new ConcurrentHashMap<>();
+        correlations = new ConcurrentHashMap<>();
     }
 
     public void add(UUID uuid, ReplyChannel replyChannel) {
-        correlations.put(uuid, new CorrelationEntry(replyChannel, Instant.now()));
-    }
 
-    public ReplyChannel removeAndGet(UUID uuid) {
-        return correlations.remove(uuid).replyChannel();
+        Objects.requireNonNull(uuid, "Correlation ID cannot be null");
+        Objects.requireNonNull(replyChannel, "ReplyChannel cannot be null");
+
+        CorrelationEntry entry = new CorrelationEntry(
+                replyChannel,
+                System.nanoTime()
+        );
+
+        if (correlations.putIfAbsent(uuid, entry) != null) {
+            throw new IllegalStateException(
+                    "Duplicate correlation ID: " + uuid
+            );
+        }
     }
 
     public ReplyChannel get(UUID uuid) {
-        return correlations.get(uuid).replyChannel();
+
+        CorrelationEntry entry = correlations.get(uuid);
+
+        return entry == null ? null : entry.replyChannel();
     }
 
-    public int getSize() { return correlations.size(); }
+    public ReplyChannel removeAndGet(UUID uuid) {
 
-    public List<UUID> getExpiredUUIDs(long correlationTimeout) {
+        CorrelationEntry entry = correlations.remove(uuid);
 
-        Instant now = Instant.now();
+        return entry == null ? null : entry.replyChannel();
+    }
 
-        return correlations.entrySet().stream()
-                .filter(entry ->
-                        Duration.between(
-                                entry.getValue().insertTime(),
-                                now
-                        ).toMillis() >= correlationTimeout
+    public int getSize() {
+        return correlations.size();
+    }
+
+    public List<ExpiredCorrelation> removeExpired(long timeoutMillis) {
+        if (timeoutMillis < 0) {
+            throw new IllegalArgumentException(
+                    "Correlation timeout cannot be negative"
+            );
+        }
+
+        long now = System.nanoTime();
+        long timeoutNanos =
+                TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+
+        List<ExpiredCandidate> expired = new ArrayList<>();
+        correlations.forEach((uuid, entry) -> {
+
+            if (now - entry.insertTimeNanos() >= timeoutNanos) {
+                if (correlations.remove(uuid, entry)) {
+                    expired.add(
+                            new ExpiredCandidate(uuid, entry)
+                    );
+                }
+            }
+        });
+
+        expired.sort(
+                Comparator.comparingLong(
+                        candidate -> candidate.entry().insertTimeNanos()
                 )
-                .sorted(Map.Entry.comparingByValue(
-                        Comparator.comparing(CorrelationEntry::insertTime)
+        );
+        return expired.stream()
+                .map(candidate -> new ExpiredCorrelation(
+                        candidate.correlationId(),
+                        candidate.entry().replyChannel()
                 ))
-                .map(Map.Entry::getKey)
                 .toList();
     }
 }

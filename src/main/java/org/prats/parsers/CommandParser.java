@@ -19,7 +19,7 @@ public class CommandParser extends MessageParser {
     }
 
 
-    public Message createCommandMessage(String command) {
+    public Message createCommandRequest(String command) {
 
         ObjectNode payload = getObjectMapper().createObjectNode();
         payload.put("body", command);
@@ -34,12 +34,28 @@ public class CommandParser extends MessageParser {
         );
     }
 
+    public Message createCommandResponse(Message command, String response) {
+
+        ObjectNode payload = getObjectMapper().createObjectNode();
+        payload.put("body", response);
+
+        return new Message(
+                MessageType.RESPONSE,
+                processType,
+                Operation.COMMAND,
+                payload,
+                response,
+                null,
+                command.getCorrelationId()
+        );
+    }
+
 
     public Message createUnknownCommandResponse(String invalidCommand) {
 
         ObjectNode payload = getObjectMapper().createObjectNode();
-        payload.put("body", "UNKNOWN_COMMAND");
-        payload.put("error", "Unable to identify command: " + invalidCommand);
+        payload.put("errorCode", "UNKNOWN_COMMAND");
+        payload.put("body", "Unable to identify command: " + invalidCommand);
 
         return new Message(
                 MessageType.RESPONSE,

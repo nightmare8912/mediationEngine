@@ -1,12 +1,11 @@
-package org.prats.refractoring;
+package org.prats.definitions;
 
-import org.prats.definitions.Message;
 import org.prats.replyChannels.ReplyChannel;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class PendingResponse {
+public class PendingDelivery {
 
     private final UUID correlationId;
     private final Message response;
@@ -15,7 +14,7 @@ public class PendingResponse {
 
     private int retryCount;
 
-    public PendingResponse(
+    public PendingDelivery(
             UUID correlationId,
             Message response,
             ReplyChannel replyChannel

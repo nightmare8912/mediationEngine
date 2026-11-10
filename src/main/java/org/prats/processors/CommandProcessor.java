@@ -42,7 +42,7 @@ public class CommandProcessor {
         }
 
         requestProcessor.process(
-                commandParser.createJSONFromMessage(commandMessage),
+                commandMessage,
                 replyChannel
         );
     }
@@ -52,18 +52,15 @@ public class CommandProcessor {
         if (command == null || command.isBlank()) {
             return null;
         }
-
-        String normalizedCommand = command.trim();
-
-        String commandName = normalizedCommand
-                .split("\\s+", 2)[0]
+        String normalizedCommand = command
+                .strip()
+                .replaceAll("\\s+", " ")
                 .toLowerCase(Locale.ROOT);
 
-        if (!validCommands.contains(commandName)) {
+        if (!validCommands.contains(normalizedCommand)) {
             return null;
         }
-
-        return commandParser.createCommandMessage(normalizedCommand);
+        return commandParser.createCommandRequest(normalizedCommand);
     }
 
     public void setRequestProcessor(RequestProcessor requestProcessor) {

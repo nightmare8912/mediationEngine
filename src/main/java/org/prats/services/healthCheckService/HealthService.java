@@ -7,7 +7,7 @@ import org.prats.definitions.HealthStatus;
 import org.prats.loggers.ShellLogger;
 import org.prats.registries.ServiceRegistry;
 import org.prats.services.Service;
-import org.prats.services.ServiceFailureReporter;
+import org.prats.services.ServiceStatusReporter;
 import org.prats.utilities.CircularBuffer;
 import org.prats.services.HealthReportAnalyzer;
 
@@ -50,7 +50,7 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
 
     private CircularBuffer<Map<String, HealthReport>> healthReports;
 
-    private volatile ServiceFailureReporter serviceFailureReporter;
+    private volatile ServiceStatusReporter serviceStatusReporter;
 
     private volatile Instant startedAt;
     private volatile Instant lastHealthCheckCompletedAt;
@@ -71,8 +71,8 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
         this.healthReportAnalyzer   = new HealthReportAnalyzer();
     }
 
-    public void setServiceFailureReporter(ServiceFailureReporter serviceFailureReporter) {
-        this.serviceFailureReporter = serviceFailureReporter;
+    public void setServiceFailureReporter(ServiceStatusReporter serviceStatusReporter) {
+        this.serviceStatusReporter = serviceStatusReporter;
     }
 
     public void analyzeAndStoreHealthReport(Service service, HealthReport healthReport) {
@@ -98,7 +98,7 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
             recentHealthReports = List.copyOf(serviceReports);
         }
 
-        if (service == this || serviceFailureReporter == null) {
+        if (service == this || serviceStatusReporter == null) {
             return;
         }
 
@@ -108,9 +108,9 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
                     healthReportAnalyzer.analyze(recentHealthReports);
 
             if (analyzedStatus == HealthStatus.HEALTHY) {
-                serviceFailureReporter.reportServiceRecovered(service);
+                serviceStatusReporter.reportServiceRecovered(service);
             } else {
-                serviceFailureReporter.reportServiceFailure(
+                serviceStatusReporter.reportServiceFailure(
                         service,
                         recentHealthReports
                 );
@@ -323,6 +323,17 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
     }
 
     @Override
+    public List<HealthReport> getRecentHealthReports() {
+        List<HealthReport> reports = new ArrayList<>();
+        for (Service service: serviceRegistry.getAllServices())
+        {
+            if (service instanceof HealthCheckable)
+                reports.addAll(getRecentHealthReports(service));
+        }
+        return reports;
+    }
+
+    @Override
     public HealthReport checkHealth() {
 
         Map<String, Object> metrics = new LinkedHashMap<>();
@@ -333,7 +344,7 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
         metrics.put("unreachableServicesLastCycle", unreachableServicesLastCycle.get());
 
         metrics.put("healthCheckInProgress", healthCheckInProgress.get());
-        metrics.put("failureReporterConfigured", serviceFailureReporter != null);
+        metrics.put("failureReporterConfigured", serviceStatusReporter != null);
 
         metrics.put("startedAt", startedAt);
         metrics.put("lastHealthCheckCompletedAt", lastHealthCheckCompletedAt);
