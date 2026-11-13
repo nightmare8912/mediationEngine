@@ -6,6 +6,7 @@ import org.prats.container.launchers.ContainerLauncher;
 import org.prats.handlers.FileHandler;
 import org.prats.loggers.ShellLogger;
 import org.prats.parsers.configParser.FilePathParser;
+import org.prats.utilities.ApplicationPaths;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,7 +17,7 @@ import java.util.Scanner;
 public class CommandLineInterface {
 
     private static final String DEFAULT_PATH_CONFIG =
-            "src/main/resources/installer/allFilePath.conf";
+            "conf/installer/allFilePath.conf";
 
     private final FileHandler fileHandler;
     private final ContainerLauncher containerLauncher;
@@ -25,7 +26,6 @@ public class CommandLineInterface {
 
     private boolean running;
 
-
     public CommandLineInterface() {
 
         this.fileHandler = new FileHandler();
@@ -33,29 +33,35 @@ public class CommandLineInterface {
         this.containerLauncher = new ContainerLauncher();
     }
 
+    // ---------------------------------------------------------
+    // WELCOME AND HELP
+    // ---------------------------------------------------------
 
     public void displayWelcomeMessage(FilePath filePath) {
 
-        String message = fileHandler.openAndRead(
+        String message = fileHandler.openResourceAndRead(
                 filePath.welcome()
         );
 
-        if (message != null && !message.isBlank()) {
+        if (!message.isBlank()) {
             ShellLogger.log(message);
         }
     }
-
 
     public void displayHelpMessage(FilePath filePath) {
 
-        String message = fileHandler.openAndRead(
+        String message = fileHandler.openResourceAndRead(
                 filePath.help()
         );
 
-        if (message != null && !message.isBlank()) {
+        if (!message.isBlank()) {
             ShellLogger.log(message);
         }
     }
+
+    // ---------------------------------------------------------
+    // PLATFORM
+    // ---------------------------------------------------------
 
     public void startPlatform() {
 
@@ -93,8 +99,13 @@ public class CommandLineInterface {
         }
     }
 
+    // ---------------------------------------------------------
+    // WATCHDOG
+    // ---------------------------------------------------------
+
     private void startWatchdog() {
-        ShellLogger.log("Launching Watchdog JVM...");
+
+        ShellLogger.log("Launching WATCHDOG JVM...");
 
         try {
 
@@ -110,17 +121,17 @@ public class CommandLineInterface {
             );
 
             ShellLogger.log(
-                    "Watchdog JVM launched successfully."
+                    "WATCHDOG JVM launched successfully."
             );
 
             ShellLogger.log(
-                    "Watchdog PID: " + watchdogProcess.pid()
+                    "WATCHDOG PID: " + watchdogProcess.pid()
             );
 
         } catch (Exception exception) {
 
             ShellLogger.log(
-                    "Unable to launch Watchdog JVM: "
+                    "Unable to launch WATCHDOG JVM: "
                             + exception.getMessage()
             );
 
@@ -128,24 +139,39 @@ public class CommandLineInterface {
         }
     }
 
+    // ---------------------------------------------------------
+    // INSTALLATION VALIDATION
+    // ---------------------------------------------------------
 
     public void validateInstallation() {
 
         try {
 
-            validateFile(
+            // Internal JAR resources.
+            validateResource(
                     filePath.welcome(),
                     "Welcome message"
             );
 
-            validateFile(
+            validateResource(
                     filePath.help(),
                     "Help message"
             );
 
+            // External configuration files.
             validateFile(
                     filePath.platformConf(),
                     "Platform configuration"
+            );
+
+            validateFile(
+                    filePath.watchdogConf(),
+                    "WATCHDOG configuration"
+            );
+
+            validateFile(
+                    filePath.databaseConf(),
+                    "Database configuration"
             );
 
             ShellLogger.log(
@@ -161,6 +187,27 @@ public class CommandLineInterface {
         }
     }
 
+    private void validateResource(
+            String resourceName,
+            String description
+    ) {
+
+        Objects.requireNonNull(
+                resourceName,
+                description + " resource cannot be null"
+        );
+
+        String content =
+                fileHandler.openResourceAndRead(resourceName);
+
+        if (content.isBlank()) {
+
+            throw new IllegalArgumentException(
+                    description + " resource is empty: "
+                            + resourceName
+            );
+        }
+    }
 
     private void validateFile(
             String configuredPath,
@@ -172,11 +219,10 @@ public class CommandLineInterface {
                 description + " path cannot be null"
         );
 
-        Path path = Path.of(configuredPath)
-                .toAbsolutePath()
-                .normalize();
+        Path path = ApplicationPaths.resolve(configuredPath);
 
-        if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+        if (!Files.isRegularFile(path)
+                || !Files.isReadable(path)) {
 
             throw new IllegalArgumentException(
                     description + " is not accessible: " + path
@@ -184,6 +230,9 @@ public class CommandLineInterface {
         }
     }
 
+    // ---------------------------------------------------------
+    // DISPLAY INSTALLATION PATHS
+    // ---------------------------------------------------------
 
     private void displayPaths() {
 
@@ -192,20 +241,45 @@ public class CommandLineInterface {
         ShellLogger.log("========================================");
 
         ShellLogger.log(
-                "Welcome message : " + filePath.welcome()
+                "Application home : "
+                        + ApplicationPaths.getHome()
         );
 
         ShellLogger.log(
-                "Help message    : " + filePath.help()
+                "Welcome resource : " + filePath.welcome()
         );
 
         ShellLogger.log(
-                "Platform config : " + filePath.platformConf()
+                "Help resource    : " + filePath.help()
+        );
+
+        ShellLogger.log(
+                "Platform config  : "
+                        + ApplicationPaths.resolve(
+                        filePath.platformConf()
+                )
+        );
+
+        ShellLogger.log(
+                "WATCHDOG config  : "
+                        + ApplicationPaths.resolve(
+                        filePath.watchdogConf()
+                )
+        );
+
+        ShellLogger.log(
+                "Database config  : "
+                        + ApplicationPaths.resolve(
+                        filePath.databaseConf()
+                )
         );
 
         ShellLogger.log("========================================");
     }
 
+    // ---------------------------------------------------------
+    // COMMAND DISPATCHER
+    // ---------------------------------------------------------
 
     private void executeCommand(String command) {
 
@@ -223,11 +297,11 @@ public class CommandLineInterface {
             case "meng start platform" ->
                     startPlatform();
 
+            case "meng start watchdog" ->
+                    startWatchdog();
+
             case "meng exit" ->
                     exitInstaller();
-
-            case "meng start watchdog" ->
-                startWatchdog();
 
             case "" -> {
                 // Ignore empty commands.
@@ -237,7 +311,6 @@ public class CommandLineInterface {
                     displayCommandNotFoundMessage(command);
         }
     }
-
 
     private void displayCommandNotFoundMessage(String command) {
 
@@ -250,6 +323,9 @@ public class CommandLineInterface {
         );
     }
 
+    // ---------------------------------------------------------
+    // EXIT
+    // ---------------------------------------------------------
 
     private void exitInstaller() {
 
@@ -260,12 +336,16 @@ public class CommandLineInterface {
         running = false;
     }
 
+    // ---------------------------------------------------------
+    // LOAD INSTALLATION PATH CONFIGURATION
+    // ---------------------------------------------------------
+
     private FilePath loadFilePaths(String[] args) {
 
         if (args == null || args.length > 1) {
 
             throw new IllegalArgumentException(
-                    "Usage: installer.jar [path-to-allFilePath.conf]"
+                    "Usage: mediation-engine [optional path override]"
             );
         }
 
@@ -283,11 +363,10 @@ public class CommandLineInterface {
             );
         }
 
-        Path path = Path.of(configuredPath)
-                .toAbsolutePath()
-                .normalize();
+        Path path = ApplicationPaths.resolve(configuredPath);
 
-        if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+        if (!Files.isRegularFile(path)
+                || !Files.isReadable(path)) {
 
             throw new IllegalArgumentException(
                     "Installation path configuration is inaccessible: "
@@ -303,12 +382,14 @@ public class CommandLineInterface {
         );
     }
 
+    // ---------------------------------------------------------
+    // SHELL LIFECYCLE
+    // ---------------------------------------------------------
 
     public void launch() {
 
         launch(new String[0]);
     }
-
 
     public void launch(String[] args) {
 
@@ -329,26 +410,27 @@ public class CommandLineInterface {
                 "Type 'meng help' to see installer commands."
         );
 
-        Scanner scanner = new Scanner(System.in);
+        try (Scanner scanner = new Scanner(System.in)) {
 
-        while (running && scanner.hasNextLine()) {
+            while (running && scanner.hasNextLine()) {
 
-            String command = scanner.nextLine()
-                    .trim()
-                    .replaceAll("\\s+", " ");
+                String command = scanner.nextLine()
+                        .trim()
+                        .replaceAll("\\s+", " ");
 
-            try {
+                try {
 
-                executeCommand(command);
+                    executeCommand(command);
 
-            } catch (RuntimeException exception) {
+                } catch (RuntimeException exception) {
 
-                ShellLogger.log(
-                        "Installer command failed: "
-                                + exception.getMessage()
-                );
+                    ShellLogger.log(
+                            "Installer command failed: "
+                                    + exception.getMessage()
+                    );
 
-                exception.printStackTrace();
+                    exception.printStackTrace();
+                }
             }
         }
 
@@ -356,6 +438,10 @@ public class CommandLineInterface {
 
         ShellLogger.log("Installer terminated.");
     }
+
+    // ---------------------------------------------------------
+    // MAIN
+    // ---------------------------------------------------------
 
     public static void main(String[] args) {
 

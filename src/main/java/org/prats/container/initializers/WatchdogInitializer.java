@@ -14,8 +14,8 @@ import org.prats.loggers.FileLogger;
 
 import org.prats.parsers.MessageParser;
 import org.prats.parsers.configParser.WatchdogConfigParser;
-import org.prats.processors.NewTCPControlProcessor;
-import org.prats.services.tcpService.NewTCPService;
+import org.prats.processors.TCPControlProcessor;
+import org.prats.services.tcpService.TCPService;
 import org.prats.services.watchdogService.WatchdogService;
 import org.prats.utilities.ContainerRuntime;
 
@@ -311,10 +311,7 @@ public class WatchdogInitializer {
         watchdogService =
                 new WatchdogService(
                         messageParser,
-                        new JVMLauncher(),
-                        ecConfigPaths,
-                        watchdogDefinition.ecConfigs(),
-                        watchdogDefinition
+                        ecConfigPaths
                 );
 
 
@@ -354,8 +351,8 @@ public class WatchdogInitializer {
                 )
         );
 
-        NewTCPControlProcessor newTCPControlProcessor
-                = new NewTCPControlProcessor(
+        TCPControlProcessor TCPControlProcessor
+                = new TCPControlProcessor(
                 TCPConnectionMode.CLIENT_ONLY,
                 tcpPeers,
                 messageParser
@@ -382,15 +379,15 @@ public class WatchdogInitializer {
 //                );
 
 
-        NewTCPService newTCPControlService
-                = new NewTCPService(
+        TCPService newTCPControlService
+                = new TCPService(
                 watchdogDefinition.coreThreads(),
                 watchdogDefinition.maxThreads(),
                 watchdogDefinition.idleTimeout(),
                 watchdogDefinition.platformControlPort(),
                 50,
                 false,
-                newTCPControlProcessor
+                TCPControlProcessor
         );
 
         // -----------------------------------------------------
@@ -400,16 +397,16 @@ public class WatchdogInitializer {
 //        ControlChannelCommunicator communicator =
 //                newTCPControlProcessor;
 
-        newTCPControlProcessor.setTcpService(
+        TCPControlProcessor.setTcpService(
                 newTCPControlService
         );
 
-        newTCPControlProcessor.setControlMessageHandler(
+        TCPControlProcessor.setControlMessageHandler(
                 watchdogService
         );
 
         watchdogService.setControlChannelCommunicator(
-                newTCPControlProcessor
+                TCPControlProcessor
         );
 
         watchdogService.setService(

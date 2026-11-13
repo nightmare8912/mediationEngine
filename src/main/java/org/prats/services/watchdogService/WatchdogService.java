@@ -37,13 +37,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *   "ecName": "ec01"
  * }
  * */
-public class WatchdogService implements Service, ControlMessageHandler{
+public class WatchdogService implements Service, ControlMessageHandler {
 
     private final MessageParser messageParser;
-    private final JVMLauncher jvmLauncher;
-    private final List<ConsolidatedECConfig> ecProperties;
-    private final Map<String, String> ecConfigPaths;
-    private final Watchdog watchdogDef;
+    private final Map<String, String> ecConfigPaths;;
     private ExecutorService watchdogWorkers;
     private Service service;
 
@@ -53,10 +50,7 @@ public class WatchdogService implements Service, ControlMessageHandler{
 
     public WatchdogService(
             MessageParser messageParser,
-            JVMLauncher jvmLauncher,
-            Map<String, String> ecConfigPaths,
-            List<ConsolidatedECConfig> ecProperties,
-            Watchdog watchdogDef
+            Map<String, String> ecConfigPaths
     ) {
 
         this.messageParser = Objects.requireNonNull(
@@ -64,24 +58,9 @@ public class WatchdogService implements Service, ControlMessageHandler{
                 "Message parser cannot be null"
         );
 
-        this.jvmLauncher = Objects.requireNonNull(
-                jvmLauncher,
-                "JVM launcher cannot be null"
-        );
-
         this.ecConfigPaths = Objects.requireNonNull(
                 ecConfigPaths,
                 "JVM launcher cannot be null"
-        );
-
-        this.ecProperties = Objects.requireNonNull(
-                ecProperties,
-                "EC Properties cannot be null"
-        );
-
-        this.watchdogDef = Objects.requireNonNull(
-                watchdogDef,
-                "Watchdog def cannot be null"
         );
 
         this.processes = new ConcurrentHashMap<>();

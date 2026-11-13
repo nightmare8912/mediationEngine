@@ -100,7 +100,7 @@ public class ExecutionContainerCommandHandler {
     protected void trace(String stage, Message message) {
 
         FileLogger.log(
-                "[TRACE][PlatformCommandHandler][" + stage + "]"
+                "[TRACE][CommandHandler][" + stage + "]"
                         + " | correlationId="
                         + (message == null ? "null" : message.getCorrelationId())
                         + " | thread="

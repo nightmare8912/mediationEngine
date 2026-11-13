@@ -14,6 +14,7 @@ public enum Operation {
     STATUS,
     INFO,
 
+    HANDSHAKE,
     AUTHENTICATE,
     COMMAND,
 

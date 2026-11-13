@@ -9,6 +9,7 @@ import org.prats.jvmLauncher.JVMLauncher;
 import org.prats.parsers.configParser.ConfigParser;
 import org.prats.parsers.configParser.ECConfigParser;
 import org.prats.parsers.configParser.WatchdogConfigParser;
+import org.prats.utilities.ApplicationPaths;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,7 +36,6 @@ public class ContainerLauncher {
 
         Path platformConfigPath = resolveExistingFile(
                 platformConfigFile,
-                null,
                 "Platform configuration"
         );
 
@@ -52,7 +52,6 @@ public class ContainerLauncher {
 
         String databaseConfig = resolveExistingFile(
                 platformDefinition.databaseConfig(),
-                platformConfigPath.getParent(),
                 "Database configuration"
         ).toString();
 
@@ -96,12 +95,14 @@ public class ContainerLauncher {
 
         Path watchdogConfigPath = resolveExistingFile(
                 watchdogConfigFile,
-                null,
-                "EC configuration"
+                "WATCHDOG configuration"
         );
 
-        Watchdog watchdogDefinition = new WatchdogConfigParser().
-                initializeWatchdogConfig(watchdogConfigFile);
+        Watchdog watchdogDefinition =
+                new WatchdogConfigParser()
+                        .initializeWatchdogConfig(
+                                watchdogConfigPath.toString()
+                        );
 
 
         List<String> appArgs = new ArrayList<>();
@@ -133,11 +134,11 @@ public class ContainerLauncher {
 
         Path ecConfigPath = resolveExistingFile(
                 ecConfigFile,
-                null,
                 "EC configuration"
         );
 
-        EC ecProperties = new ECConfigParser().initializeECConfigs(ecConfigFile);
+        EC ecProperties = new ECConfigParser()
+                .initializeECConfigs(ecConfigPath.toString());
 
         List<String> appArgs = new ArrayList<>();
 
@@ -154,6 +155,20 @@ public class ContainerLauncher {
         addArgument(appArgs, "container-type", ContainerType.EC.name());
 
         addArgument(appArgs, "container-conf", ecConfigPath);
+
+        if (ecProperties.dbConfigPath() != null) {
+
+            Path databaseConfigPath = resolveExistingFile(
+                    ecProperties.dbConfigPath(),
+                    "EC database configuration"
+            );
+
+            addArgument(
+                    appArgs,
+                    "database-conf",
+                    databaseConfigPath
+            );
+        }
 
 
 
@@ -242,6 +257,14 @@ public class ContainerLauncher {
 
         effectiveJvmArgs.add(
                 "-Dmediation.process.name=" + processName
+        );
+
+        Files.createDirectories(
+                ApplicationPaths.resolve("logs")
+        );
+
+        Files.createDirectories(
+                ApplicationPaths.resolve("data")
         );
 
         return jvmLauncher.launchJvm(
@@ -370,28 +393,10 @@ public class ContainerLauncher {
 
     private Path resolveExistingFile(
             String configuredPath,
-            Path baseDirectory,
             String description
     ) {
 
-        Objects.requireNonNull(
-                configuredPath,
-                description + " path cannot be null"
-        );
-
-        if (configuredPath.isBlank()) {
-            throw new IllegalArgumentException(
-                    description + " path cannot be empty"
-            );
-        }
-
-        Path path = Path.of(configuredPath);
-
-        if (!path.isAbsolute() && baseDirectory != null) {
-            path = baseDirectory.resolve(path);
-        }
-
-        path = path.toAbsolutePath().normalize();
+        Path path = ApplicationPaths.resolve(configuredPath);
 
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
             throw new IllegalArgumentException(

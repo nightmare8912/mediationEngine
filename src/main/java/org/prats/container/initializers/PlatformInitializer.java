@@ -34,9 +34,10 @@ import org.prats.services.ExternalHealthMonitor;
 import org.prats.services.databaseService.DatabaseService;
 import org.prats.services.healthCheckService.HealthService;
 import org.prats.services.messageService.MessageService;
-import org.prats.services.runtimeService.PlatformService;
-import org.prats.services.tcpService.NewTCPService;
+import org.prats.services.containerServices.PlatformService;
+import org.prats.services.tcpService.TCPService;
 
+import org.prats.utilities.ApplicationPaths;
 import org.prats.utilities.ContainerRuntime;
 import org.prats.utilities.HealthReportAnalyzer;
 import org.prats.loggers.FileLogger;
@@ -188,12 +189,9 @@ public class PlatformInitializer {
      */
     private Path resolveConfigPath(String configuredPath) {
 
-        Path path = Path.of(configuredPath)
-                .toAbsolutePath()
-                .normalize();
+        Path path = ApplicationPaths.resolve(configuredPath);
 
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
-
             throw new IllegalArgumentException(
                     "Configuration file does not exist or is not readable: "
                             + path
@@ -208,10 +206,7 @@ public class PlatformInitializer {
      * Resolves database configuration relative to the
      * platform configuration file when necessary.
      */
-    private Path resolveDatabaseConfigPath(
-            String configuredPath,
-            Path baseDirectory
-    ) {
+    private Path resolveDatabaseConfigPath(String configuredPath) {
 
         Objects.requireNonNull(
                 configuredPath,
@@ -220,15 +215,14 @@ public class PlatformInitializer {
 
         Path path = Path.of(configuredPath);
 
+        // Parser may already have resolved this path.
         if (!path.isAbsolute()) {
-
-            path = baseDirectory.resolve(path);
+            path = ApplicationPaths.resolve(configuredPath);
         }
 
         path = path.toAbsolutePath().normalize();
 
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
-
             throw new IllegalArgumentException(
                     "Database configuration does not exist or is not readable: "
                             + path
@@ -283,8 +277,7 @@ public class PlatformInitializer {
         }
 
         databaseConfigPath = resolveDatabaseConfigPath(
-                platformDefinition.databaseConfig(),
-                platformConfigPath.getParent()
+                platformDefinition.databaseConfig()
         );
 
         validatePlatformConfiguration();
@@ -628,16 +621,26 @@ public class PlatformInitializer {
             );
         }
 
-        NewTCPControlProcessor newTCPControlProcessor
-                = new NewTCPControlProcessor(
+        for(ConsolidatedWatchdogConfig watchdogConfig: platformDefinition.watchdogConfigs()) {
+            tcpPeers.add(
+                    new TCPPeer(
+                            watchdogConfig.id(),
+                            watchdogConfig.host(),
+                            watchdogConfig.controlPort()
+                    )
+            );
+        }
+
+        TCPControlProcessor TCPControlProcessor
+                = new TCPControlProcessor(
                 TCPConnectionMode.SERVER_ONLY,
                 tcpPeers,
                 messageParser
         );
 
 
-        NewTCPApplicationProcessor newTCPApplicationProcessor
-                = new NewTCPApplicationProcessor(
+        TCPApplicationProcessor TCPApplicationProcessor
+                = new TCPApplicationProcessor(
                 tcpPeers,
                 messageService,
                 messageParser
@@ -664,15 +667,15 @@ public class PlatformInitializer {
 //                        tcpControlProcessor
 //                );
 
-        NewTCPService newTCPService
-                = new NewTCPService(
+        TCPService TCPService
+                = new TCPService(
                 coreThreads,
                 maxThreads,
                 idleTimeout,
                 tcpPort,
                 tcpBacklog,
                 true,
-                newTCPApplicationProcessor
+                TCPApplicationProcessor
 
         );
 
@@ -697,15 +700,15 @@ public class PlatformInitializer {
 //                        tcpControlProcessor
 //                );
 
-        NewTCPService newTCPControlService
-                = new NewTCPService(
+        TCPService newTCPControlService
+                = new TCPService(
                 coreThreads,
                 maxThreads,
                 idleTimeout,
                 controlPort,
                 tcpBacklog,
                 true,
-                newTCPControlProcessor
+                TCPControlProcessor
         );
 
 
@@ -716,7 +719,7 @@ public class PlatformInitializer {
         databaseService.setMessageDispatcher(messageService);
 
         platformService.setControlChannelCommunicator(
-                newTCPControlProcessor
+                TCPControlProcessor
         );
 
         healthService.setServiceFailureReporter(
@@ -724,17 +727,17 @@ public class PlatformInitializer {
         );
 
         platformControlHandler.setControlChannelCommunicator(
-                newTCPControlProcessor
+                TCPControlProcessor
         );
 
         platformControlHandler.setMessageDispatcher(
                 messageService
         );
 
-        newTCPControlProcessor.setTcpService(newTCPControlService);
-        newTCPControlProcessor.setControlMessageHandler(platformService);
+        TCPControlProcessor.setTcpService(newTCPControlService);
+        TCPControlProcessor.setControlMessageHandler(platformService);
 
-        newTCPApplicationProcessor.setTcpService(newTCPService);
+        TCPApplicationProcessor.setTcpService(TCPService);
 
         // -------------------------------------------------
         // 12. Service registration
@@ -746,7 +749,7 @@ public class PlatformInitializer {
 
         serviceRegistry.registerService(
                 "application-tcp",
-                newTCPService
+                TCPService
         );
 
         serviceRegistry.registerService(

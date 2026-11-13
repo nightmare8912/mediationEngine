@@ -253,7 +253,9 @@ public class PlatformControlHandler {
 
                 Throwable cause = unwrapCompletionError(error);
 
-                String errorMessage = cause.getMessage() != null
+                String errorMessage = cause == null
+                        ? "Unknown asynchronous failure."
+                        : cause.getMessage() != null
                         ? cause.getMessage()
                         : cause.getClass().getSimpleName();
 
@@ -266,27 +268,44 @@ public class PlatformControlHandler {
 
                 try {
 
+                    if (response == null) {
+
+                        throw new IllegalStateException(
+                                "WATCHDOG completed the operation "
+                                        + "without returning a response."
+                        );
+                    }
+
                     String status = commandParser.extractPayloadField(
                             response,
                             "status",
                             String.class
                     );
 
+                    if (status == null || status.isBlank()) {
+
+                        throw new IllegalStateException(
+                                "WATCHDOG response contains an empty status field."
+                        );
+                    }
+
                     finalResponse = commandParser.createCommandResponse(
                             command,
                             status
                     );
 
-                } catch (JsonProcessingException e) {
+                } catch (JsonProcessingException | RuntimeException e) {
 
                     FileLogger.log(
-                            "Unable to parse WATCHDOG final response: "
+                            "Unable to process WATCHDOG final response: "
+                                    + e.getClass().getSimpleName()
+                                    + ": "
                                     + e.getMessage()
                     );
 
                     finalResponse = commandParser.createCommandResponse(
                             command,
-                            "WATCHDOG final response could not be parsed."
+                            "WATCHDOG final response could not be processed."
                     );
                 }
             }

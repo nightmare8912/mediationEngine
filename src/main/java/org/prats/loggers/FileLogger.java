@@ -1,6 +1,8 @@
 
 package org.prats.loggers;
 
+import org.prats.utilities.ApplicationPaths;
+
 import java.io.BufferedWriter;
 import java.io.IOException;
 
@@ -41,12 +43,12 @@ public final class FileLogger {
             );
 
     private static final Path LOG_DIRECTORY =
-            Path.of(
+            ApplicationPaths.resolve(
                     System.getProperty(
                             "mediation.log.directory",
                             "logs"
                     )
-            ).toAbsolutePath().normalize();
+            );
 
 
     private static final Path LOG_FILE =

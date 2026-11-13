@@ -5,6 +5,7 @@ public enum MessageType {
     INFO,
     RESPONSE,
     HEARTBEAT,
-    TCP_HANDSHAKE,
+    HANDSHAKE_REQUEST,
+    HANDSHAKE_RESPONSE,
     UNKNOWN
 }

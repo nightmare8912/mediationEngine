@@ -34,8 +34,8 @@ import org.prats.registries.RetryRegistry;
 import org.prats.services.databaseService.DatabaseService;
 import org.prats.services.healthCheckService.HealthService;
 import org.prats.services.messageService.MessageService;
-import org.prats.services.runtimeService.ExecutionContainerService;
-import org.prats.services.tcpService.NewTCPService;
+import org.prats.services.containerServices.ExecutionContainerService;
+import org.prats.services.tcpService.TCPService;
 
 import org.prats.utilities.ContainerRuntime;
 import org.prats.utilities.HealthReportAnalyzer;
@@ -607,6 +607,14 @@ public class ExecutionContainerInitializer {
         List<TCPPeer> tcpPeers =
                 new ArrayList<>();
 
+        tcpPeers.add(
+                new TCPPeer(
+                    "PLATFORM",
+                    "127.0.0.1",
+                    ec.controlPort()
+                )
+        );
+
         for (ConsolidatedECConfig ecConfig : configuredEC) {
 
             tcpPeers.add(
@@ -619,16 +627,16 @@ public class ExecutionContainerInitializer {
         }
 
 
-        NewTCPControlProcessor newTCPControlProcessor =
-                new NewTCPControlProcessor(
+        TCPControlProcessor TCPControlProcessor =
+                new TCPControlProcessor(
                         TCPConnectionMode.CLIENT_ONLY,
                         tcpPeers,
                         messageParser
                 );
 
 
-        NewTCPApplicationProcessor newTCPApplicationProcessor =
-                new NewTCPApplicationProcessor(
+        TCPApplicationProcessor TCPApplicationProcessor =
+                new TCPApplicationProcessor(
                         tcpPeers,
                         messageService,
                         messageParser
@@ -639,15 +647,15 @@ public class ExecutionContainerInitializer {
         // 11. Main EC TCP service
         // -----------------------------------------------------
 
-        NewTCPService newTCPService =
-                new NewTCPService(
+        TCPService TCPService =
+                new TCPService(
                         coreThreads,
                         maxThreads,
                         idleTimeout,
                         tcpPort,
                         tcpBacklog,
                         true,
-                        newTCPApplicationProcessor
+                        TCPApplicationProcessor
                 );
 
 
@@ -655,15 +663,15 @@ public class ExecutionContainerInitializer {
         // 12. Control TCP service
         // -----------------------------------------------------
 
-        NewTCPService newTCPControlService =
-                new NewTCPService(
+        TCPService newTCPControlService =
+                new TCPService(
                         coreThreads,
                         maxThreads,
                         idleTimeout,
                         controlPort,
                         tcpBacklog,
                         false,
-                        newTCPControlProcessor
+                        TCPControlProcessor
                 );
 
 
@@ -693,20 +701,20 @@ public class ExecutionContainerInitializer {
         executionContainerService.setMessageDispatcher(messageService);
 
         executionContainerService.setControlChannelCommunicator(
-                newTCPControlProcessor
+                TCPControlProcessor
         );
 
         healthService.setServiceFailureReporter(
                 executionContainerService
         );
 
-        newTCPControlProcessor.setTcpService(newTCPControlService);
+        TCPControlProcessor.setTcpService(newTCPControlService);
 
-        newTCPControlProcessor.setControlMessageHandler(
+        TCPControlProcessor.setControlMessageHandler(
                 executionContainerService
         );
 
-        newTCPApplicationProcessor.setTcpService(newTCPService);
+        TCPApplicationProcessor.setTcpService(TCPService);
 
 
         // -----------------------------------------------------
@@ -721,7 +729,7 @@ public class ExecutionContainerInitializer {
 
         serviceRegistry.registerService(
                 "application-tcp",
-                newTCPService
+                TCPService
         );
 
         serviceRegistry.registerService(

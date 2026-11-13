@@ -5,6 +5,8 @@ import java.util.Objects;
 public record ConsolidatedWatchdogConfig(
         String id,
         String label,
+        String host,
+        int controlPort,
         String configPath
 ) {
 
