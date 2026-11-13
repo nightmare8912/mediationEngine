@@ -1,6 +1,6 @@
 package org.prats.registries;
 
-import org.prats.replyChannels.ReplyChannel;
+import org.prats.definitions.interfaces.ReplyChannel;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -98,5 +98,19 @@ public class CorrelationRegistry {
                         candidate.entry().replyChannel()
                 ))
                 .toList();
+    }
+
+    // for retained sessions. where we dont want to remove the record from correlation while the session is active
+    // there is ofc a better way to do it, but i dnt want to implement it now.
+    public void resetTimeout(UUID uuid) {
+        CorrelationEntry existing   = correlations.get(uuid);
+        CorrelationEntry updated    = new CorrelationEntry(
+                existing.replyChannel(),
+                System.nanoTime()
+        );
+        correlations.put(
+                uuid,
+                updated
+        );
     }
 }

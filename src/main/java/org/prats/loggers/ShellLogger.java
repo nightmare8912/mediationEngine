@@ -3,7 +3,7 @@ package org.prats.loggers;
 public class ShellLogger {
     private static boolean isLoggingEnabled = true;
 
-//    public ShellLogger() {
+//    public FileLogger() {
 //        isLoggingEnabled = true;
 //    }
 

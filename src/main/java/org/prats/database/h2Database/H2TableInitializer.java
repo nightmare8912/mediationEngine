@@ -1,12 +1,12 @@
 package org.prats.database.h2Database;
 
 import org.prats.database.databaseUtilities.sqlHelper.SQLQuery;
-import org.prats.fileHanldingUtilities.configParser.ConfigParser;
+import org.prats.parsers.configParser.ConfigParser;
 import org.prats.database.databaseUtilities.sqlHelper.SQLSyntaxHelper;
-import org.prats.definitions.Database;
-import org.prats.definitions.DatabaseTable;
-import org.prats.definitions.Table;
-import org.prats.definitions.TableField;
+import org.prats.definitions.records.Database;
+import org.prats.definitions.records.DatabaseTable;
+import org.prats.definitions.records.Table;
+import org.prats.definitions.records.TableField;
 import org.prats.database.DatabaseConnectionPool;
 
 import java.sql.Connection;
@@ -91,7 +91,7 @@ public class H2TableInitializer {
     public void initializeDatabase() {
         StringBuilder errorMessage;
         ConfigParser configParser = new ConfigParser();
-        Database database = configParser.initializeDatabaseConfig(databaseConfigFile);
+        Database database = configParser.initializeDatabaseConfig(databaseConfigFile).get("internal-h2");
 
         database.tables().sort(
                 new Comparator<DatabaseTable>() {

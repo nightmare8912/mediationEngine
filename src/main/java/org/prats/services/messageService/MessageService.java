@@ -1,21 +1,25 @@
 
 package org.prats.services.messageService;
 
-import org.prats.definitions.*;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.classes.PendingDelivery;
+import org.prats.definitions.enums.HealthStatus;
+import org.prats.definitions.interfaces.HealthCheckable;
+import org.prats.definitions.records.HealthReport;
+import org.prats.loggers.FileLogger;
 import org.prats.registries.CorrelationRegistry;
-import org.prats.replyChannels.ReplyChannel;
+import org.prats.definitions.interfaces.ReplyChannel;
 import org.prats.registries.RetryRegistry;
 import org.prats.processors.RequestProcessor;
 import org.prats.processors.ResponseProcessor;
-import org.prats.services.MessageDispatcher;
-import org.prats.services.Service;
+import org.prats.definitions.interfaces.MessageDispatcher;
+import org.prats.definitions.interfaces.Service;
 import org.prats.threading.ThreadPool;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -90,12 +94,13 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
             int coreThread,
             int maxThread,
             long idleTimeout,
-            int retryResponseCount,
             long retryInterval,
             long cleanupInterval,
             long correlationTimeout,
             RequestProcessor requestProcessor,
-            ResponseProcessor responseProcessor
+            ResponseProcessor responseProcessor,
+            CorrelationRegistry correlationRegistry,
+            RetryRegistry retryRegistry
     ) {
         this.coreThread             = coreThread;
         this.maxThread              = maxThread;
@@ -108,8 +113,8 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
         this.retryJobQueued         = new AtomicBoolean(false);
         this.cleanupJobQueued       = new AtomicBoolean(false);
         this.admissionLock          = new Object();
-        this.correlationRegistry    = new CorrelationRegistry();
-        this.retryRegistry          = new RetryRegistry(retryResponseCount);
+        this.correlationRegistry    = correlationRegistry;
+        this.retryRegistry          = retryRegistry;
 
         this.requestProcessor       = requestProcessor;
         this.responseProcessor      = responseProcessor;
@@ -170,33 +175,39 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
         }
     }
 
+
     private void triggerCorrelationCleanupJob() {
+
         if (!cleanupJobQueued.compareAndSet(false, true)) {
             return;
         }
         try {
             submitToThreadPool(() -> {
                 try {
-                    cleanExpiredCorrelations();
+                    try {
+                        cleanExpiredCorrelations();
+                    } finally {
+                        cleanExpiredPendingDeliveries();
+                    }
                 } finally {
                     cleanupJobQueued.set(false);
                 }
             }, false);
-
         } catch (RejectedExecutionException exception) {
+
             cleanupJobQueued.set(false);
         }
     }
 
+
+
     private void retryFailedResponses() {
-
-        for (PendingDelivery pendingDelivery : retryRegistry.getAllFailures()) {
-
-            if (pendingDelivery.tryStartRetry()) {
-                dispatchResponse(pendingDelivery.getResponse());
-            }
+        for (PendingDelivery pendingDelivery :
+                retryRegistry.getAllFailures()) {
+            responseProcessor.retry(pendingDelivery);
         }
     }
+
 
     private void cleanExpiredCorrelations() {
         List<CorrelationRegistry.ExpiredCorrelation> expired =
@@ -208,6 +219,24 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
             );
         }
     }
+
+
+    private void cleanExpiredPendingDeliveries() {
+
+        List<PendingDelivery> expiredDeliveries =
+                retryRegistry.removeExpired();
+
+        for (PendingDelivery pendingDelivery : expiredDeliveries) {
+
+            FileLogger.log(
+                    "Pending response delivery expired: "
+                            + pendingDelivery.getCorrelationId()
+                            + " | Retry attempts: "
+                            + pendingDelivery.getRetryCount()
+            );
+        }
+    }
+
 
     @Override
     public void shutdown() {
@@ -236,6 +265,11 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
                     TimeUnit.MILLISECONDS.toNanos(100)
             );
         }
+    }
+
+    @Override
+    public void cleanup() {
+
     }
 
     private boolean hasOutstandingWork() {

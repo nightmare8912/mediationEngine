@@ -1,11 +1,11 @@
 package org.prats.processors;
 
-import org.prats.definitions.Message;
-import org.prats.definitions.MessageType;
-import org.prats.definitions.Operation;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.enums.MessageType;
+import org.prats.definitions.enums.Operation;
 import org.prats.parsers.MessageParser;
 import org.prats.registries.CorrelationRegistry;
-import org.prats.replyChannels.ReplyChannel;
+import org.prats.definitions.interfaces.ReplyChannel;
 
 public class RequestProcessor {
 

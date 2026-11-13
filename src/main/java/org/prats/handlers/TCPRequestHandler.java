@@ -1,6 +1,7 @@
 package org.prats.handlers;
 
-import org.prats.definitions.Message;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.interfaces.RequestHandler;
 
 public class TCPRequestHandler implements RequestHandler {
 

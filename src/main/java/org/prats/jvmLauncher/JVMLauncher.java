@@ -1,6 +1,6 @@
 package org.prats.jvmLauncher;
 
-import org.prats.loggers.ShellLogger;
+import org.prats.loggers.FileLogger;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -33,7 +33,7 @@ public class JVMLauncher {
         // application arguments
         command.addAll(applicationArgs);
 
-        ShellLogger.log("Launch JVM command: " + command);
+        FileLogger.log("Launch JVM command: " + command);
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
 

@@ -11,6 +11,7 @@ public class HikariDBConnectionPool implements DatabaseConnectionPool {
 
     private volatile HikariDataSource dataSource;
 
+
     @Override
     public synchronized void initialize(
             String url,
@@ -25,13 +26,18 @@ public class HikariDBConnectionPool implements DatabaseConnectionPool {
         Objects.requireNonNull(user, "Database user cannot be null");
         Objects.requireNonNull(pass, "Database password cannot be null");
 
-        if (dataSource != null && !dataSource.isClosed()) {
+        HikariDataSource existing = dataSource;
+
+        if (existing != null && !existing.isClosed()) {
+
             throw new IllegalStateException(
                     "Connection pool is already initialized"
             );
         }
 
-        dataSource = null;
+        if (existing != null) {
+            dataSource = null;
+        }
 
         HikariConfig config = new HikariConfig();
 
@@ -44,35 +50,35 @@ public class HikariDBConnectionPool implements DatabaseConnectionPool {
         config.setMaximumPoolSize(maxConnections);
 
         config.setPoolName("MediationEngine-H2-Pool");
-
-        HikariDataSource newDataSource = new HikariDataSource(config);
-
+        HikariDataSource newDataSource =
+                new HikariDataSource(config);
         dataSource = newDataSource;
     }
 
+
+
     @Override
-    public DataSource getDataSource() {
-
+    public synchronized DataSource getDataSource() {
         HikariDataSource current = dataSource;
-
         if (current == null || current.isClosed()) {
             throw new IllegalStateException(
                     "Hikari connection pool is not initialized"
             );
         }
-
         return current;
     }
 
+
+
     @Override
     public synchronized void shutdown() {
-
         HikariDataSource current = dataSource;
-
-        dataSource = null;
-
-        if (current != null && !current.isClosed()) {
+        if (current == null) {
+            return;
+        }
+        if (!current.isClosed()) {
             current.close();
         }
+        dataSource = null;
     }
 }

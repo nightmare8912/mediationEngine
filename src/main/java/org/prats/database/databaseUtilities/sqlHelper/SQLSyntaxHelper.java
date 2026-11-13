@@ -1,8 +1,7 @@
 package org.prats.database.databaseUtilities.sqlHelper;
 
-import org.apache.commons.csv.CSVRecord;
-import org.prats.definitions.Table;
-import org.prats.definitions.TableField;
+import org.prats.definitions.records.Table;
+import org.prats.definitions.records.TableField;
 
 import java.util.ArrayList;
 import java.util.Collections;

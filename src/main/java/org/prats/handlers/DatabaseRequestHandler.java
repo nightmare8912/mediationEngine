@@ -1,12 +1,11 @@
 package org.prats.handlers;
 
-import com.zaxxer.hikari.HikariDataSource;
 import org.prats.database.databaseUtilities.DatabaseResourceManager;
 import org.prats.database.databaseUtilities.MessageSQLParser;
 import org.prats.database.databaseUtilities.sqlHelper.SQLQuery;
-import org.prats.definitions.Message;
-import org.prats.definitions.Operation;
-import org.prats.loggers.ShellLogger;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.interfaces.RequestHandler;
+import org.prats.loggers.FileLogger;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -53,7 +52,7 @@ public class DatabaseRequestHandler implements RequestHandler {
                     executeQuery(sqlQuery, connection)
             );
         } catch (SQLException sqlException) {
-            ShellLogger.log(
+            FileLogger.log(
                     "[DatabaseRequestHandler] [handleQuery], Exception: "
                             + sqlException.getMessage()
             );
@@ -71,7 +70,7 @@ public class DatabaseRequestHandler implements RequestHandler {
             );
         } catch (SQLException sqlException) {
 
-            ShellLogger.log(
+            FileLogger.log(
                     "[DatabaseRequestHandler] [handleUpdate], Exception: "
                             + sqlException.getMessage()
             );

@@ -1,6 +1,6 @@
 package org.prats.utilities;
 
-import org.prats.definitions.HealthReport;
+import org.prats.definitions.records.HealthReport;
 
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -118,7 +118,7 @@ public class HealthReportFormatter {
                     output.append(String.format(
                             "        %-38s : %s%n",
                             formatMetricName(metric),
-                            formatMetricValue(value)
+                            formatMetricValue(metric, value)
                     ));
                 }
             }
@@ -145,20 +145,55 @@ public class HealthReportFormatter {
 
     private String formatMetricName(String metric) {
 
+        if (metric.equals("containerUptimeSeconds")) {
+            return "Container Uptime";
+        }
+
+        if (metric.equals("containerStartedAt")) {
+            return "Container Started At";
+        }
+
         String formatted = metric.replaceAll(
-                "([a-z0-9])([A-Z])", "$1 $2"
+                "([a-z0-9])([A-Z])",
+                "$1 $2"
         );
 
         return Character.toUpperCase(formatted.charAt(0))
                 + formatted.substring(1);
     }
 
-    private String formatMetricValue(Object value) {
+    private String formatMetricValue(
+            String metric,
+            Object value
+    ) {
 
         if (value instanceof Boolean booleanValue) {
             return booleanValue ? "Yes" : "No";
         }
 
+        if (metric.equals("containerUptimeSeconds")
+                && value instanceof Number number) {
+
+            return formatUptime(number.longValue());
+        }
+
         return String.valueOf(value);
+    }
+
+    private String formatUptime(long totalSeconds) {
+
+        long days = totalSeconds / 86400;
+        long hours = (totalSeconds % 86400) / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+
+        return String.format(
+                Locale.ROOT,
+                "%d days, %02d hours, %02d minutes, %02d seconds",
+                days,
+                hours,
+                minutes,
+                seconds
+        );
     }
 }

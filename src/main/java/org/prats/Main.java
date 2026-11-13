@@ -1,6 +1,6 @@
 package org.prats;
 
-import org.prats.shell.CommandLineInterface;
+import org.prats.installer.CommandLineInterface;
 
 public class Main {
     public static void main(String[] args) {

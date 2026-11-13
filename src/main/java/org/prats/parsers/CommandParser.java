@@ -3,10 +3,10 @@ package org.prats.parsers;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import org.prats.definitions.Message;
-import org.prats.definitions.MessageType;
-import org.prats.definitions.Operation;
-import org.prats.definitions.ProcessType;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.enums.MessageType;
+import org.prats.definitions.enums.Operation;
+import org.prats.definitions.enums.ProcessType;
 
 public class CommandParser extends MessageParser {
 

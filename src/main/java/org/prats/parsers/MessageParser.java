@@ -5,15 +5,17 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
-import org.prats.definitions.Message;
-import org.prats.definitions.MessageType;
-import org.prats.definitions.Operation;
-import org.prats.definitions.ProcessType;
-import org.prats.loggers.ShellLogger;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.enums.MessageType;
+import org.prats.definitions.enums.Operation;
+import org.prats.definitions.enums.ProcessType;
+import org.prats.loggers.FileLogger;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -61,7 +63,7 @@ public class MessageParser {
 
         } catch (JsonProcessingException jsonExe) {
 
-            ShellLogger.log(
+            FileLogger.log(
                     "Error while parsing message: "
                             + message + "\n"
                             + jsonExe.getMessage()
@@ -91,7 +93,7 @@ public class MessageParser {
 
         } catch (JsonProcessingException jsonExe) {
 
-            ShellLogger.log(
+            FileLogger.log(
                     "[createJSONFromMessage] Error while parsing: "
                             + jsonExe.getMessage()
             );
@@ -111,7 +113,7 @@ public class MessageParser {
 
             } catch (JsonProcessingException ignored) {
 
-                ShellLogger.log(
+                FileLogger.log(
                         "[createJSONFromMessage] Error while parsing, fallback failed..."
                 );
             }
@@ -121,7 +123,10 @@ public class MessageParser {
     }
 
 
-    public String extractPayloadField(Message message, String fieldName) {
+    public <T> T extractPayloadField(
+            Message message,
+            String fieldName,
+            Class<T> targetType) throws JsonProcessingException {
 
         JsonNode payload = message.getPayload();
 
@@ -135,10 +140,10 @@ public class MessageParser {
             return null;
         }
 
-        return fieldValue.asText();
+        return objectMapper.treeToValue(fieldValue, targetType);
     }
 
-    public Message createErrorMessage(
+    public Message createErrorResponse(
             UUID correlationId,
             String errorCode,
             String errorDescription
@@ -160,6 +165,86 @@ public class MessageParser {
                 null,
                 null,
                 correlationId
+        );
+    }
+
+    public Message createResponse(
+            UUID correlationId,
+            Map<String, String> messageValues
+    ) {
+        Objects.requireNonNull(correlationId, "Correlation ID cannot be null");
+        Objects.requireNonNull(messageValues, "Message cannot be null");
+
+        ObjectNode payload = objectMapper.createObjectNode();
+
+        for (Map.Entry<String, String> field: messageValues.entrySet()) {
+            payload.put(field.getKey(), field.getValue());
+        }
+
+        return new Message(
+                MessageType.RESPONSE,
+                processType,
+                Operation.INFO,
+                payload,
+                null,
+                null,
+                correlationId
+        );
+    }
+
+    public <T> Message putPayloadField(
+            Message message,
+            String fieldName,
+            T fieldValue
+    ) {
+
+        Objects.requireNonNull(message, "Message cannot be null");
+        Objects.requireNonNull(fieldName, "Field name cannot be null");
+
+        if (fieldName.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Field name cannot be blank"
+            );
+        }
+
+        JsonNode existingPayload = message.getPayload();
+
+        ObjectNode payload;
+
+        if (existingPayload == null || existingPayload.isNull()) {
+
+            payload = objectMapper.createObjectNode();
+
+        } else if (existingPayload.isObject()) {
+
+            payload = ((ObjectNode) existingPayload).deepCopy();
+
+        } else {
+
+            throw new IllegalArgumentException(
+                    "Message payload must be a JSON object"
+            );
+        }
+
+        JsonNode value = fieldValue == null
+                ? NullNode.instance
+                : objectMapper.valueToTree(fieldValue);
+
+        payload.set(fieldName, value);
+
+        message.setPayload(payload);
+
+        return message;
+    }
+
+    public Message createEmptyMessage() {
+        return new Message(
+                MessageType.UNKNOWN,
+                processType,
+                Operation.UNKNOWN,
+                objectMapper.createObjectNode(),
+                null,
+                null
         );
     }
 

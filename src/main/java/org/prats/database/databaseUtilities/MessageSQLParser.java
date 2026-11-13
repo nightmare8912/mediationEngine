@@ -2,10 +2,9 @@ package org.prats.database.databaseUtilities;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.prats.database.databaseUtilities.sqlHelper.SQLQuery;
-import org.prats.definitions.Message;
-import org.prats.definitions.Operation;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.enums.Operation;
 
-import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;

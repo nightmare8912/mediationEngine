@@ -1,7 +1,8 @@
 package org.prats.registries;
 
-import org.prats.definitions.Permission;
-import org.prats.definitions.Session;
+import org.prats.definitions.enums.Permission;
+import org.prats.definitions.interfaces.SessionManager;
+import org.prats.definitions.records.Session;
 
 import java.time.Duration;
 import java.time.Instant;

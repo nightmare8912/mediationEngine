@@ -2,8 +2,8 @@ package org.prats.database.h2Database;
 
 import org.prats.database.databaseUtilities.DatabaseResourceManager;
 import org.prats.database.DatabaseConnectionPool;
-import org.prats.definitions.Database;
-import org.prats.fileHanldingUtilities.configParser.DatabaseConfigParser;
+import org.prats.definitions.records.Database;
+import org.prats.parsers.configParser.DatabaseConfigParser;
 
 import javax.sql.DataSource;
 import java.util.Objects;
@@ -13,15 +13,17 @@ public class H2DatabaseResourceManager implements DatabaseResourceManager {
     private final DatabaseConnectionPool connectionPool;
     private final String databaseConfigFile;
 
-    private boolean initialized;
+    private volatile boolean initialized;
 
     public H2DatabaseResourceManager(
             String databaseConfigFile,
             DatabaseConnectionPool connectionPool
     ) {
-        this.databaseConfigFile = Objects.requireNonNull(databaseConfigFile);
-        this.connectionPool = Objects.requireNonNull(connectionPool);
+        this.databaseConfigFile     = Objects.requireNonNull(databaseConfigFile);
+        this.connectionPool         = Objects.requireNonNull(connectionPool);
+        this.initialized            = false;
     }
+
 
     @Override
     public synchronized void initialize() {
@@ -33,9 +35,12 @@ public class H2DatabaseResourceManager implements DatabaseResourceManager {
         }
 
         try {
-            Database database = new DatabaseConfigParser()
-                    .initializeDatabaseConfig(databaseConfigFile);
-
+            Database database = Objects.requireNonNull(
+                    new DatabaseConfigParser()
+                            .initializeDatabaseConfigs(databaseConfigFile)
+                            .get("internal-h2"),
+                    "Internal H2 database configuration was not found"
+            );
             connectionPool.initialize(
                     database.url(),
                     database.user(),
@@ -44,45 +49,43 @@ public class H2DatabaseResourceManager implements DatabaseResourceManager {
                     database.idleTimeout(),
                     database.maxConnections()
             );
-
             Objects.requireNonNull(
                     connectionPool.getDataSource(),
                     "DataSource initialization failed"
             );
-
             initialized = true;
-
         } catch (RuntimeException exception) {
-
             try {
                 connectionPool.shutdown();
             } catch (RuntimeException cleanupException) {
                 exception.addSuppressed(cleanupException);
             }
-
+            initialized = false;
             throw exception;
         }
     }
 
+
+
     @Override
     public synchronized DataSource getDataSource() {
-
         if (!initialized) {
             throw new IllegalStateException(
                     "Database resources have not been initialized"
             );
         }
-
-        return connectionPool.getDataSource();
+        return Objects.requireNonNull(
+                connectionPool.getDataSource(),
+                "Initialized database DataSource is unavailable"
+        );
     }
+
+
 
     @Override
     public synchronized void close() {
-
-        try {
-            connectionPool.shutdown();
-        } finally {
-            initialized = false;
-        }
+        connectionPool.shutdown();
+        initialized = false;
     }
+
 }

@@ -1,15 +1,13 @@
 
 package org.prats.services.healthCheckService;
 
-import org.prats.definitions.HealthCheckable;
-import org.prats.definitions.HealthReport;
-import org.prats.definitions.HealthStatus;
-import org.prats.loggers.ShellLogger;
-import org.prats.registries.ServiceRegistry;
-import org.prats.services.Service;
-import org.prats.services.ServiceStatusReporter;
+import org.prats.definitions.interfaces.*;
+import org.prats.definitions.records.HealthReport;
+import org.prats.definitions.enums.HealthStatus;
+import org.prats.loggers.FileLogger;
 import org.prats.utilities.CircularBuffer;
-import org.prats.services.HealthReportAnalyzer;
+import org.prats.utilities.ContainerRuntime;
+import org.prats.utilities.HealthReportAnalyzer;
 
 import java.time.Instant;
 import java.time.Duration;
@@ -75,26 +73,51 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
         this.serviceStatusReporter = serviceStatusReporter;
     }
 
-    public void analyzeAndStoreHealthReport(Service service, HealthReport healthReport) {
+    public void analyzeAndStoreHealthReport(
+            Service service,
+            HealthReport healthReport
+    ) {
+
+        Objects.requireNonNull(service, "Service cannot be null");
+        Objects.requireNonNull(healthReport, "Health report cannot be null");
+
+        // Resolve the unique registry identity of this service instance.
+        String serviceId = serviceRegistry.getServiceId(service);
+
+        // Normalize the report name so that reports carry the unique identity.
+        HealthReport identifiedReport = new HealthReport(
+                serviceId,
+                healthReport.status(),
+                healthReport.message(),
+                healthReport.timestamp(),
+                healthReport.metrics()
+        );
 
         Map<String, HealthReport> serviceHealth = new LinkedHashMap<>();
 
-        serviceHealth.put(service.getName() + "_" + healthReport.timestamp().toString(), healthReport);
+        serviceHealth.put(
+                serviceId + "_" + identifiedReport.timestamp(),
+                identifiedReport
+        );
+
         healthReports.add(serviceHealth);
 
-        Deque<HealthReport> serviceReports = recentReportsByService.computeIfAbsent(
-                service.getName(),
-                key -> new ArrayDeque<>()
-        );
+        Deque<HealthReport> serviceReports =
+                recentReportsByService.computeIfAbsent(
+                        serviceId,
+                        key -> new ArrayDeque<>()
+                );
 
         List<HealthReport> recentHealthReports;
 
         synchronized (serviceReports) {
-            serviceReports.addLast(healthReport);
+
+            serviceReports.addLast(identifiedReport);
 
             while (serviceReports.size() > healthCheckRetention) {
                 serviceReports.removeFirst();
             }
+
             recentHealthReports = List.copyOf(serviceReports);
         }
 
@@ -108,8 +131,11 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
                     healthReportAnalyzer.analyze(recentHealthReports);
 
             if (analyzedStatus == HealthStatus.HEALTHY) {
+
                 serviceStatusReporter.reportServiceRecovered(service);
+
             } else {
+
                 serviceStatusReporter.reportServiceFailure(
                         service,
                         recentHealthReports
@@ -117,18 +143,24 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
             }
 
         } catch (Exception exception) {
-            ShellLogger.log(
-                    "[HealthService] [analyzeAndStoreHealthReport] Failure reporter exception: "
+
+            FileLogger.log(
+                    "[HealthService] [analyzeAndStoreHealthReport] "
+                            + "Failure reporter exception: "
                             + exception.getMessage()
             );
         }
     }
 
-    private HealthReport createServiceUnreachableHealthReport(Service service) {
+
+    private HealthReport createServiceUnreachableHealthReport(
+            Service service
+    ) {
+
         return new HealthReport(
-                service.getName(),
+                serviceRegistry.getServiceId(service),
                 HealthStatus.UNREACHABLE,
-                service.getName() + " is unreachable",
+                serviceRegistry.getServiceId(service) + " is unreachable",
                 Instant.now(),
                 new HashMap<>()
         );
@@ -163,7 +195,7 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
 
                     } catch (Exception exception) {
                         // this is bad, could not get response from service...
-                        ShellLogger.log("[HealthService] [performHealthChecks] Exception: " + exception.getMessage());
+                        FileLogger.log("[HealthService] [performHealthChecks] Exception: " + exception.getMessage());
                         healthReport = createServiceUnreachableHealthReport(service);
                     }
                     checkedServices++;
@@ -178,7 +210,7 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
             lastCycleFailed = true;
             lastCycleFailureMessage = exception.getMessage();
             failedHealthCheckCycles.incrementAndGet();
-            ShellLogger.log(
+            FileLogger.log(
                     "[HealthService] [performHealthChecks] Health check cycle failed: "
                             + exception.getMessage()
             );
@@ -225,7 +257,7 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
                             performHealthChecks();
                         } catch (Exception e) {
                             // this exception catching is imp as if this thread dies, the health check service would die and won't be able to check services now...
-                            ShellLogger.log(e.getMessage());
+                            FileLogger.log(e.getMessage());
                         }
                     },
                     0,
@@ -247,7 +279,7 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
             if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
                 if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                    ShellLogger.log("HealthService scheduler failed to terminate.");
+                    FileLogger.log("HealthService scheduler failed to terminate.");
                     return;
                 }
             }
@@ -308,10 +340,17 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
     }
 
     @Override
+    public void cleanup() {
+
+    }
+
+    @Override
     public List<HealthReport> getRecentHealthReports(Service service) {
 
+        String serviceId = serviceRegistry.getServiceId(service);
+
         Deque<HealthReport> serviceReports =
-                recentReportsByService.get(service.getName());
+                recentReportsByService.get(serviceId);
 
         if (serviceReports == null) {
             return List.of();
@@ -324,12 +363,16 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
 
     @Override
     public List<HealthReport> getRecentHealthReports() {
+
         List<HealthReport> reports = new ArrayList<>();
-        for (Service service: serviceRegistry.getAllServices())
-        {
-            if (service instanceof HealthCheckable)
+
+        for (Service service : serviceRegistry.getAllServices()) {
+
+            if (service instanceof HealthCheckable) {
                 reports.addAll(getRecentHealthReports(service));
+            }
         }
+
         return reports;
     }
 
@@ -337,6 +380,19 @@ public class HealthService implements Service, HealthCheckable, HealthChecker {
     public HealthReport checkHealth() {
 
         Map<String, Object> metrics = new LinkedHashMap<>();
+
+        Instant containerStartedAt = ContainerRuntime.getStartedAt();
+
+        long uptimeSeconds = Math.max(
+                0,
+                Duration.between(
+                        containerStartedAt,
+                        Instant.now()
+                ).getSeconds()
+        );
+
+        metrics.put("containerStartedAt", containerStartedAt);
+        metrics.put("containerUptimeSeconds", uptimeSeconds);
 
         metrics.put("healthCheckCycles", healthCheckCycles.get());
         metrics.put("failedHealthCheckCycles", failedHealthCheckCycles.get());

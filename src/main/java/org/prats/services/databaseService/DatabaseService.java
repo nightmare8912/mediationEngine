@@ -2,14 +2,15 @@
 package org.prats.services.databaseService;
 
 import org.prats.database.databaseUtilities.DatabaseResourceManager;
-import org.prats.definitions.HealthCheckable;
-import org.prats.definitions.HealthReport;
-import org.prats.definitions.HealthStatus;
-import org.prats.definitions.Message;
-import org.prats.loggers.ShellLogger;
-import org.prats.services.MessageDispatcher;
+import org.prats.definitions.interfaces.HealthCheckable;
+import org.prats.definitions.interfaces.Submittable;
+import org.prats.definitions.records.HealthReport;
+import org.prats.definitions.enums.HealthStatus;
+import org.prats.definitions.classes.Message;
+import org.prats.loggers.FileLogger;
+import org.prats.definitions.interfaces.MessageDispatcher;
 import org.prats.handlers.DatabaseRequestHandler;
-import org.prats.services.Service;
+import org.prats.definitions.interfaces.Service;
 import org.prats.threading.ThreadPool;
 
 import javax.sql.DataSource;
@@ -36,9 +37,17 @@ public class DatabaseService implements Service, Submittable, HealthCheckable {
     private final int maxThreads;
     private final long idleTimeout;
 
-    private DataSource dataSource;
+    private final Object lifecycleLock = new Object();
+
+    private volatile DataSource dataSource;
+    private volatile ExecutorService databaseWorkers;
+
+    private volatile String lastStartupFailure;
+
+    private static final long SHUTDOWN_GRACE_SECONDS = 30;
+    private static final long SHUTDOWN_FORCE_SECONDS = 5;
+
     private MessageDispatcher messageDispatcher;
-    private ExecutorService databaseWorkers;
 
     private volatile boolean isQuiescing;
 
@@ -72,49 +81,152 @@ public class DatabaseService implements Service, Submittable, HealthCheckable {
         this.admissionLock              = new Object();
     }
 
+
     @Override
     public void start() {
 
-        try {
-            ShellLogger.log("[DatabaseService] Initializing database resources...");
-            databaseResourceManager.initialize();
-            ShellLogger.log("[DatabaseService] Database resources initialized.");
-            dataSource = Objects.requireNonNull(
-                    databaseResourceManager.getDataSource(),
-                    "Database DataSource was not initialized"
-            );
-            ShellLogger.log("[DatabaseService] DataSource acquired.");
-            databaseWorkers = new ThreadPool().initializeAndGetThreadPool(
-                    coreThreads,
-                    maxThreads,
-                    idleTimeout,
-                    false
-            );
-            ShellLogger.log("[DatabaseService] Worker executor initialized.");
+        synchronized (lifecycleLock) {
+
             synchronized (admissionLock) {
-                isQuiescing = false;
+                isQuiescing = true;
             }
-            ShellLogger.log("[DatabaseService] Startup completed.");
-        } catch (Exception exception) {
-            isQuiescing = true;
-            ShellLogger.log(
-                    "[DatabaseService] Startup failed: " + exception
-            );
-            exception.printStackTrace();
-            throw new IllegalStateException(
-                    "DatabaseService initialization failed",
-                    exception
-            );
+            ExecutorService previousWorkers = databaseWorkers;
+
+            if (previousWorkers != null && !previousWorkers.isTerminated()) {
+                throw new IllegalStateException(
+                        "Cannot start DatabaseService: previous worker executor is still operational"
+                );
+            }
+
+            DataSource newDataSource = null;
+            ExecutorService newWorkers = null;
+
+            try {
+
+                FileLogger.log("[DatabaseService] Initializing database resources...");
+
+                databaseResourceManager.initialize();
+
+                FileLogger.log("[DatabaseService] Database resources initialized.");
+
+                newDataSource = Objects.requireNonNull(
+                        databaseResourceManager.getDataSource(),
+                        "Database DataSource was not initialized"
+                );
+
+                FileLogger.log("[DatabaseService] DataSource acquired.");
+
+                newWorkers = Objects.requireNonNull(
+                        new ThreadPool().initializeAndGetThreadPool(
+                                coreThreads,
+                                maxThreads,
+                                idleTimeout,
+                                false
+                        ),
+                        "Database worker executor initialization returned null"
+                );
+
+                FileLogger.log("[DatabaseService] Worker executor initialized.");
+
+                synchronized (admissionLock) {
+                    dataSource = newDataSource;
+                    databaseWorkers = newWorkers;
+                    isQuiescing = false;
+                }
+
+                lastStartupFailure = null;
+                FileLogger.log("[DatabaseService] Startup completed.");
+
+            } catch (Exception exception) {
+
+                synchronized (admissionLock) {
+                    isQuiescing = true;
+                }
+
+                if (newWorkers != null) {
+                    newWorkers.shutdownNow();
+                }
+                try {
+                    databaseResourceManager.close();
+                } catch (RuntimeException cleanupException) {
+                    exception.addSuppressed(cleanupException);
+                }
+
+                synchronized (admissionLock) {
+                    databaseWorkers = null;
+                    dataSource = null;
+                    isQuiescing = true;
+                }
+
+                lastStartupFailure = exception.toString();
+                FileLogger.log(
+                        "[DatabaseService] Startup failed: " + exception
+                );
+                exception.printStackTrace();
+                throw new IllegalStateException(
+                        "DatabaseService initialization failed",
+                        exception
+                );
+            }
         }
     }
 
+
+
     @Override
     public void shutdown() {
-        databaseWorkers.shutdownNow();
-        if (dataSource != null) {
+
+        synchronized (lifecycleLock) {
+
+            synchronized (admissionLock) {
+                isQuiescing = true;
+            }
+
+            ExecutorService workers = databaseWorkers;
+            if (workers != null) {
+                workers.shutdown();
+                try {
+                    boolean terminated = workers.awaitTermination(
+                            SHUTDOWN_GRACE_SECONDS,
+                            TimeUnit.SECONDS
+                    );
+                    if (!terminated) {
+
+                        FileLogger.log(
+                                "[DatabaseService] Graceful shutdown timed out. Forcing shutdown."
+                        );
+                        workers.shutdownNow();
+                        terminated = workers.awaitTermination(
+                                SHUTDOWN_FORCE_SECONDS,
+                                TimeUnit.SECONDS
+                        );
+                    }
+                    if (!terminated) {
+                        throw new IllegalStateException(
+                                "Database workers did not terminate within the shutdown deadline"
+                        );
+                    }
+                } catch (InterruptedException exception) {
+                    workers.shutdownNow();
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "Interrupted while shutting down DatabaseService",
+                            exception
+                    );
+                }
+            }
+
             databaseResourceManager.close();
+
+            synchronized (admissionLock) {
+                databaseWorkers = null;
+                dataSource = null;
+                isQuiescing = true;
+            }
+            FileLogger.log("[DatabaseService] Shutdown completed.");
         }
     }
+
 
     @Override
     public void quiesce() {
@@ -137,120 +249,158 @@ public class DatabaseService implements Service, Submittable, HealthCheckable {
         }
     }
 
+    @Override
+    public void cleanup() {
+
+    }
+
     private boolean hasOutstandingWork() {
         return outstandingTasks.get() > 0;
     }
 
+
     @Override
     public void submit(Message message) {
         synchronized (admissionLock) {
-            if (!isQuiescing)
-                submitToThreadPool(() -> {
-                    messageDispatcher.dispatchResponse(databaseRequestHandler.handleRequest(message));
-                });
-            else {
+            if (isQuiescing) {
                 rejectedDuringQuiesce.incrementAndGet();
-                // TODO: this is important, a message needs to be delivered back to the caller that the db service is not accepting work,
-                // otherwise, the calling service would not know what happened with their request
+                return;
             }
+
+            ExecutorService workers = databaseWorkers;
+            if (workers == null || workers.isShutdown()) {
+                rejectedTasks.incrementAndGet();
+                return;
+            }
+            submitToThreadPool(
+                    workers,
+                    () -> {
+                        messageDispatcher.dispatchResponse(
+                                databaseRequestHandler.handleRequest(message)
+                        );
+                    }
+            );
         }
     }
 
+
     // centralized the submit task to capture diagnostic at one place
-    private void submitToThreadPool(Runnable runnable) {
+    private void submitToThreadPool(
+            ExecutorService workers,
+            Runnable runnable
+    ) {
+
+        outstandingTasks.incrementAndGet();
+        submittedTasks.incrementAndGet();
+
         try {
-            outstandingTasks.incrementAndGet();
-            databaseWorkers.submit(() -> {
+            workers.execute(() -> {
                 activeTasks.incrementAndGet();
                 try {
                     runnable.run();
-                } catch (Exception e) {
+                } catch (RuntimeException | Error exception) {
                     failedTasks.incrementAndGet();
-                    throw e;
+                    throw exception;
                 } finally {
                     completedTasks.incrementAndGet();
                     activeTasks.decrementAndGet();
                     outstandingTasks.decrementAndGet();
                 }
             });
-
-            submittedTasks.incrementAndGet();
-
-        } catch (RejectedExecutionException e) {
+        } catch (RejectedExecutionException exception) {
             outstandingTasks.decrementAndGet();
+            submittedTasks.decrementAndGet();
             rejectedTasks.incrementAndGet();
-            throw e;
+            throw exception;
         }
     }
+
 
     public void setMessageDispatcher(MessageDispatcher messageDispatcher) {
         this.messageDispatcher = messageDispatcher;
     }
+
 
     @Override
     public synchronized HealthReport checkHealth() {
 
         Map<String, Object> metrics = new LinkedHashMap<>();
 
-        metrics.put("isQuiescing", isQuiescing);
-        metrics.put("dataSourceInitialized", dataSource != null);
-        metrics.put("executorInitialized", databaseWorkers != null);
+        ExecutorService workers = databaseWorkers;
+        DataSource currentDataSource = dataSource;
 
+        boolean executorInitialized = workers != null;
+        boolean dataSourceInitialized = currentDataSource != null;
+        boolean executorShutdown =
+                workers != null && workers.isShutdown();
+        boolean executorTerminated =
+                workers != null && workers.isTerminated();
+
+        metrics.put("isQuiescing", isQuiescing);
+        metrics.put("dataSourceInitialized", dataSourceInitialized);
+        metrics.put("executorInitialized", executorInitialized);
+        metrics.put("executorShutdown", executorShutdown);
+        metrics.put("executorTerminated", executorTerminated);
+        metrics.put(
+                "executorOperational",
+                workers != null && !executorShutdown && !executorTerminated
+        );
+
+        metrics.put("lastStartupFailure", lastStartupFailure);
         metrics.put("submittedTasks", submittedTasks.get());
         metrics.put("completedTasks", completedTasks.get());
         metrics.put("failedTasks", failedTasks.get());
         metrics.put("rejectedTasks", rejectedTasks.get());
         metrics.put("rejectedDuringQuiesce", rejectedDuringQuiesce.get());
-
         metrics.put("activeTasks", activeTasks.get());
         metrics.put("outstandingTasks", outstandingTasks.get());
-
-        metrics.put("connectionAcquisitionFailures",
-                connectionAcquisitionFailures.get());
-
-        if (databaseWorkers != null) {
-            metrics.put("executorShutdown", databaseWorkers.isShutdown());
-            metrics.put("executorTerminated", databaseWorkers.isTerminated());
-        }
-
+        metrics.put(
+                "connectionAcquisitionFailures",
+                connectionAcquisitionFailures.get()
+        );
         HealthStatus status;
         String message;
 
-        if (databaseWorkers == null || dataSource == null) {
+        if (workers == null || currentDataSource == null) {
             status = HealthStatus.UNREACHABLE;
             message = "Database service has not been initialized.";
-        } else if (databaseWorkers.isTerminated() || databaseWorkers.isShutdown()) {
+        } else if (executorShutdown || executorTerminated) {
             status = HealthStatus.UNHEALTHY;
             message = "Database worker executor is no longer operational.";
+
         } else {
-            boolean databaseConnectionAvailable = checkDatabaseConnection();
 
-            metrics.put("databaseConnectionAvailable",
-                    databaseConnectionAvailable);
-
+            boolean databaseConnectionAvailable =
+                    checkDatabaseConnection(currentDataSource);
+            metrics.put(
+                    "databaseConnectionAvailable",
+                    databaseConnectionAvailable
+            );
             if (!databaseConnectionAvailable) {
                 status = HealthStatus.UNHEALTHY;
                 message = "Unable to establish a database connection.";
+
             } else {
                 boolean newTaskFailures =
                         failedTasks.get() > lastReportedFailedTasks;
-
                 boolean newTaskRejections =
                         rejectedTasks.get() > lastReportedRejectedTasks;
-
                 lastReportedFailedTasks = failedTasks.get();
                 lastReportedRejectedTasks = rejectedTasks.get();
-
                 if (newTaskFailures || newTaskRejections) {
+
                     status = HealthStatus.DEGRADED;
+
                     message = "Database service is operational but has experienced task failures or rejections.";
+
                 } else {
+
                     status = HealthStatus.HEALTHY;
+
                     message = "Database service is operating normally.";
                 }
             }
         }
-
         return new HealthReport(
                 "DatabaseService",
                 status,
@@ -260,11 +410,14 @@ public class DatabaseService implements Service, Submittable, HealthCheckable {
         );
     }
 
-    private boolean checkDatabaseConnection() {
-        try (Connection connection = dataSource.getConnection()) {
+
+    private boolean checkDatabaseConnection(DataSource source) {
+        try (Connection connection = source.getConnection()) {
             return connection.isValid(2);
-        } catch (SQLException e) {
+        } catch (SQLException exception) {
+            connectionAcquisitionFailures.incrementAndGet();
             return false;
         }
     }
+
 }

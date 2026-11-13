@@ -1,13 +1,22 @@
 package org.prats.processors;
 
-import org.prats.definitions.Message;
+import org.prats.definitions.classes.Message;
+import org.prats.definitions.classes.ProcessContext;
 import org.prats.parsers.CommandParser;
-import org.prats.replyChannels.ReplyChannel;
+import org.prats.definitions.interfaces.ReplyChannel;
 
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class CommandProcessor {
+
+    private static final Pattern EC_LIFECYCLE_PATTERN =
+            Pattern.compile(
+                    "^(start|stop|restart)\\s+ec\\s+([a-zA-Z0-9][a-zA-Z0-9._-]*)$",
+                    Pattern.CASE_INSENSITIVE
+            );
 
     private final CommandParser commandParser;
     private RequestProcessor requestProcessor;
@@ -52,22 +61,44 @@ public class CommandProcessor {
         if (command == null || command.isBlank()) {
             return null;
         }
+
         String normalizedCommand = command
                 .strip()
-                .replaceAll("\\s+", " ")
+                .replaceAll("\\s+", " ");
+
+        String lowercaseCommand = normalizedCommand
                 .toLowerCase(Locale.ROOT);
 
-        if (!validCommands.contains(normalizedCommand)) {
-            return null;
+
+        if (validCommands.contains(lowercaseCommand)) {
+
+            return commandParser.createCommandRequest(
+                    lowercaseCommand
+            );
         }
-        return commandParser.createCommandRequest(normalizedCommand);
+
+        if (!ProcessContext.getProcessName().equals("platform"))
+            return null;
+
+        Matcher matcher = EC_LIFECYCLE_PATTERN.matcher(normalizedCommand);
+
+        if (matcher.matches()) {
+
+            String action = matcher.group(1).toLowerCase(Locale.ROOT);
+            String ecId = matcher.group(2);
+
+            String canonicalCommand = action + " ec " + ecId;
+
+            return commandParser.createCommandRequest(
+                    canonicalCommand
+            );
+        }
+
+        return null;
     }
 
     public void setRequestProcessor(RequestProcessor requestProcessor) {
         this.requestProcessor = requestProcessor;
     }
 
-    private void setValidCommands() {
-
-    }
 }
