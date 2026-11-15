@@ -7,13 +7,11 @@ import org.prats.definitions.records.ConsolidatedECConfig;
 import org.prats.definitions.records.TCPPeer;
 import org.prats.definitions.records.Watchdog;
 
-import org.prats.jvmLauncher.JVMLauncher;
-
 import org.prats.loggers.EngineLogger;
 
 import org.prats.parsers.MessageParser;
 import org.prats.parsers.configParser.WatchdogConfigParser;
-import org.prats.processors.TCPControlProcessor;
+import org.prats.processors.TCPProtocolProcessor;
 import org.prats.services.tcpService.TCPService;
 import org.prats.services.watchdogService.WatchdogService;
 import org.prats.utilities.ContainerRuntime;
@@ -548,8 +546,8 @@ public class WatchdogInitializer {
                         + " | controlPort=" + watchdogDefinition.platformControlPort()
         );
 
-        TCPControlProcessor TCPControlProcessor
-                = new TCPControlProcessor(
+        TCPProtocolProcessor TCPProtocolProcessor
+                = new TCPProtocolProcessor(
                 TCPConnectionMode.CLIENT_ONLY,
                 tcpPeers,
                 messageParser
@@ -601,7 +599,7 @@ public class WatchdogInitializer {
                 watchdogDefinition.platformControlPort(),
                 50,
                 false,
-                TCPControlProcessor
+                TCPProtocolProcessor
         );
 
         log.info(() ->
@@ -621,7 +619,7 @@ public class WatchdogInitializer {
                 "[WatchdogInitializer][initializeWatchdogService] Injecting TCP service into TCPControlProcessor"
         );
 
-        TCPControlProcessor.setTcpService(
+        TCPProtocolProcessor.setTcpService(
                 newTCPControlService
         );
 
@@ -629,7 +627,7 @@ public class WatchdogInitializer {
                 "[WatchdogInitializer][initializeWatchdogService] Injecting WatchdogService as TCP control message handler"
         );
 
-        TCPControlProcessor.setControlMessageHandler(
+        TCPProtocolProcessor.setControlMessageHandler(
                 watchdogService
         );
 
@@ -638,7 +636,7 @@ public class WatchdogInitializer {
         );
 
         watchdogService.setControlChannelCommunicator(
-                TCPControlProcessor
+                TCPProtocolProcessor
         );
 
         log.debug(() ->
@@ -648,8 +646,6 @@ public class WatchdogInitializer {
         watchdogService.setService(
                 newTCPControlService
         );
-        watchdogService.setDiagnostics(new org.prats.handlers.JVMDiagnosticsHandler(messageParser,
-                () -> List.of(newTCPControlService), () -> newTCPControlService.checkHealth().status()));
 
         watchdogService.setService(newTCPControlService);
 

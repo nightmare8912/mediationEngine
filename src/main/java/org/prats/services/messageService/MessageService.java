@@ -509,15 +509,14 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
             }
         } catch (RejectedExecutionException exception) {
             log.warn("[MessageService][dispatchRequest] Request rejected by admission control");
-            var payload = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
-            payload.put("ok", false); payload.put("errorCode", "OVERLOADED");
-            payload.put("body", "Message service is busy or quiescing. Retry later.");
             var operation = message.getOperation() == org.prats.definitions.enums.Operation.UNKNOWN
                     ? org.prats.definitions.enums.Operation.COMMAND : message.getOperation();
             Message rejected = new Message(org.prats.definitions.enums.MessageType.RESPONSE,
-                    org.prats.definitions.enums.ProcessType.PLATFORM, operation, payload,
+                    org.prats.definitions.enums.ProcessType.PLATFORM, operation, null,
                     null, null, message.getCorrelationId());
-            rejected.setStatus("FAILED"); replyChannel.sendReply(rejected);
+            new org.prats.parsers.MessageParser(org.prats.definitions.enums.ProcessType.PLATFORM)
+                    .attachError(rejected, "OVERLOADED", "Message service is busy or quiescing. Retry later.");
+            replyChannel.sendReply(rejected);
         }
 
         log.debug("[MessageService][dispatchRequest] Request task submitted");

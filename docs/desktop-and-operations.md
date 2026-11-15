@@ -39,7 +39,7 @@ TCPService. Connection establishment and shutdown run on its connector executor;
 transport workers perform framing, reads and writes. The desktop retains its
 32-request limit and two-million-character response limit.
 
-## Accounts over nc
+## Management over nc
 
 ```sh
 nc 127.0.0.1 15000
@@ -47,26 +47,13 @@ nc 127.0.0.1 15000
 
 ```text
 mng help
-mng register operator <password-of-10-to-128-characters>
-mng login operator <password>
-mng whoami
+mng status
 mng health report platform
 mng health report ec01
-mng logout
 ```
 
-Accounts are stored in the platform's `users` table. The password column is
-widened in place to 255 characters; new passwords are salted PBKDF2-HMAC-SHA256
-hashes with 600,000 iterations. Existing plaintext passwords are never accepted
-by the new login implementation. Usernames are case-sensitive, 3–30 characters.
-Sessions expire after 30 minutes and are removed when a TCP connection closes.
-Five failed login attempts throttle that username for one minute. Passwords,
-session tokens and SQL parameter values are excluded from application logs.
-
-`mng help`, registration and login work without a session. Platform management
-and database requests require login. Currently every registered active account
-is an operator; role-based administration is not implemented. Account tables
-cannot be accessed through generic database messages.
+Management commands run directly on the connected endpoint without an account
+session. See [platform commands](platform-commands.md) for the supported commands.
 
 The existing TCP protocol is not encrypted. Keep local listeners bound to
 loopback; remote access needs a trusted tunnel or transport-level TLS.

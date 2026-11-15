@@ -34,4 +34,5 @@ Overall health combines independent service statuses. Failure counters from
 different services are never compared as if they were one service's history.
 Only an explicit failed-recovery status is reported as `RECOVERY_FAILED`.
 
-Platform management now requires an account session. Use `mng register <username> <password>`, then `mng login <username> <password>` on the same connection. `mng help` remains available before login. See [desktop and operations](desktop-and-operations.md) for the Swing client, diagnostics, capacity limits and watchdog recovery.
+Management commands run directly on the connected endpoint without an account session.
+See [desktop and operations](desktop-and-operations.md) for the desktop client and operations details.

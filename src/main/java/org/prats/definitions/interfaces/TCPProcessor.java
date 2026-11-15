@@ -5,10 +5,12 @@ import org.prats.definitions.classes.ClientConnection;
 import org.prats.definitions.classes.Message;
 import org.prats.loggers.FileLogger;
 
+import java.net.Socket;
+import java.util.List;
 import java.util.concurrent.CompletionStage;
 
 public interface TCPProcessor {
-    default java.util.List<java.net.Socket> connectedSockets() { return java.util.List.of(); }
+    default List<Socket> connectedSockets() { return List.of(); }
 
     // processes an incoming JSON.
     void processIncoming(
@@ -29,6 +31,8 @@ public interface TCPProcessor {
     void cleanupCorrelations();
 
     void reconcilePeers();
+
+    boolean isPeerRegistered(String peerId);
 
     // called when a connection terminates.
     default void onConnectionClosed(

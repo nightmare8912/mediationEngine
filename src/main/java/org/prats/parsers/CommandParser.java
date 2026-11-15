@@ -1,7 +1,8 @@
 
 package org.prats.parsers;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.prats.definitions.records.CommandRequest;
+import org.prats.definitions.records.CommandResponse;
 
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.enums.MessageType;
@@ -21,8 +22,7 @@ public class CommandParser extends MessageParser {
 
     public Message createCommandRequest(String command) {
 
-        ObjectNode payload = getObjectMapper().createObjectNode();
-        payload.put("body", command);
+        var payload = toPayload(new CommandRequest(command));
 
         return new Message(
                 MessageType.REQUEST,
@@ -36,8 +36,7 @@ public class CommandParser extends MessageParser {
 
     public Message createCommandResponse(Message command, String response) {
 
-        ObjectNode payload = getObjectMapper().createObjectNode();
-        payload.put("body", response);
+        var payload = toPayload(new CommandResponse(response));
 
         return new Message(
                 MessageType.RESPONSE,
@@ -53,17 +52,9 @@ public class CommandParser extends MessageParser {
 
     public Message createUnknownCommandResponse(String invalidCommand) {
 
-        ObjectNode payload = getObjectMapper().createObjectNode();
-        payload.put("errorCode", "UNKNOWN_COMMAND");
-        payload.put("body", "Unable to identify command: " + invalidCommand);
-
-        return new Message(
-                MessageType.RESPONSE,
-                processType,
-                Operation.COMMAND,
-                payload,
-                invalidCommand,
-                null
-        );
+        Message response = createErrorResponse(java.util.UUID.randomUUID(),
+                "UNKNOWN_COMMAND", "Unable to identify command: " + invalidCommand);
+        response.setOperation(Operation.COMMAND);
+        return response;
     }
 }

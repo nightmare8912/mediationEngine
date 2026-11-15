@@ -3,6 +3,7 @@ package org.prats.services.containerServices;
 
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.enums.ContainerType;
+import org.prats.definitions.interfaces.TCPMessageHandler;
 import org.prats.definitions.records.ConsolidatedECConfig;
 import org.prats.handlers.ECControlHandler;
 import org.prats.handlers.ExecutionContainerCommandHandler;
@@ -22,7 +23,7 @@ import java.util.concurrent.*;
 // however if that fails, it will ask the platform to kill itself and restart again
 // if that fails as well, the platform should be able to detect that container service unresponsive and
 // initiate its restart, only an external jvm which runs the platform jvm can kill this service
-public class ExecutionContainerService extends ContainerService {
+public class ExecutionContainerService extends ContainerService implements TCPMessageHandler {
 
     private static final EngineLogger log =
             EngineLogger.getLogger(ExecutionContainerService.class);
@@ -275,7 +276,7 @@ public class ExecutionContainerService extends ContainerService {
     }
 
     @Override
-    public void onTimeout(Message originalRequest) {
+    public void onTimeout(Message originalRequest, Throwable cause) {
 
         log.debug("[ExecutionContainerService][onTimeout] Timeout handler invoked; no timeout handling implemented");
     }

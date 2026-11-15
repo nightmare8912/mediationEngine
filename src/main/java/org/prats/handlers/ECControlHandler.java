@@ -2,7 +2,7 @@ package org.prats.handlers;
 
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.enums.MessageType;
-import org.prats.definitions.interfaces.ControlChannelCommunicator;
+import org.prats.definitions.interfaces.ExternalChanelCommunicator;
 import org.prats.definitions.interfaces.HealthChecker;
 import org.prats.definitions.records.ConsolidatedHealthReport;
 import org.prats.loggers.EngineLogger;
@@ -16,17 +16,10 @@ public class ECControlHandler {
     private final HealthChecker healthChecker;
     private final MessageParser messageParser;
 
-    private ControlChannelCommunicator controlChannelCommunicator;
-    private JVMDiagnosticsHandler diagnostics;
-    public void setDiagnostics(JVMDiagnosticsHandler diagnostics) { this.diagnostics = diagnostics; }
+    private ExternalChanelCommunicator externalChanelCommunicator;
     public void handleRequest(Message request) {
-        if (diagnostics != null && (request.getOperation() == org.prats.definitions.enums.Operation.DIAGNOSTICS
-                || request.getOperation() == org.prats.definitions.enums.Operation.RUN_GC)) {
-            controlChannelCommunicator.sendResponse(diagnostics.handleRequest(request));
-        } else {
-            controlChannelCommunicator.sendResponse(messageParser.createErrorResponse(
-                    request.getCorrelationId(), "UNSUPPORTED_OPERATION", "Unsupported EC control operation."));
-        }
+        externalChanelCommunicator.sendResponse(messageParser.createErrorResponse(
+                request.getCorrelationId(), "UNSUPPORTED_OPERATION", "Unsupported EC control operation."));
     }
 
     public ECControlHandler(
@@ -41,15 +34,15 @@ public class ECControlHandler {
         );
     }
 
-    public void setControlChannelCommunicator(ControlChannelCommunicator controlChannelCommunicator) {
-        this.controlChannelCommunicator = controlChannelCommunicator;
+    public void setControlChannelCommunicator(ExternalChanelCommunicator externalChanelCommunicator) {
+        this.externalChanelCommunicator = externalChanelCommunicator;
 
         log.debug(() ->
                 "[ECControlHandler][setControlChannelCommunicator] Control channel communicator configured"
                         + " | communicatorType="
-                        + (controlChannelCommunicator == null
+                        + (externalChanelCommunicator == null
                         ? "null"
-                        : controlChannelCommunicator.getClass().getSimpleName())
+                        : externalChanelCommunicator.getClass().getSimpleName())
         );
     }
 
@@ -78,7 +71,7 @@ public class ECControlHandler {
                         + " | recipientId=" + heartbeat.getRecipientID()
         );
 
-        controlChannelCommunicator.sendRequest(heartbeat);
+        externalChanelCommunicator.sendRequest(heartbeat);
 
         log.debug(() ->
                 "[ECControlHandler][sendHeartbeat] Heartbeat request submitted to control channel"

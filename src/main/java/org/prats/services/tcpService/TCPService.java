@@ -22,7 +22,14 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
@@ -54,9 +61,14 @@ public class TCPService implements Service, HealthCheckable {
     private static final EngineLogger log =
             EngineLogger.getLogger(TCPService.class);
 
+    // =========================================================
+    // Configuration
+    // =========================================================
+
     private final int coreThreads;
     private final int maxThreads;
     private final long idleTimeout;
+
     private final String bindHost;
     private final int tcpPort;
     private final int tcpBacklog;
@@ -64,31 +76,28 @@ public class TCPService implements Service, HealthCheckable {
 
     private final TCPProcessor tcpProcessor;
     private final int maxFrameChars;
-    private final int outboundBudget = Integer.getInteger("mediation.tcp.max-outbound-bytes", 16 * 1024 * 1024);
-    private final java.util.concurrent.Semaphore outboundBytes = new java.util.concurrent.Semaphore(outboundBudget);
 
-    public java.util.List<java.util.Map<String, Object>> connectionDetails() {
-        java.util.Set<Socket> sockets = new java.util.HashSet<>(activeConnections);
-        sockets.addAll(tcpProcessor.connectedSockets());
-        return sockets.stream().filter(socket -> !socket.isClosed()).map(socket -> {
-            java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
-            row.put("local", String.valueOf(socket.getLocalSocketAddress()));
-            row.put("remote", String.valueOf(socket.getRemoteSocketAddress()));
-            row.put("state", socket.isConnected() ? "CONNECTED" : "CONNECTING");
-            row.put("service", getName());
-            return row;
-        }).toList();
-    }
+    private final int outboundBudget =
+            Integer.getInteger(
+                    "mediation.tcp.max-outbound-bytes",
+                    16 * 1024 * 1024
+            );
 
-    private final Object admissionLock
-            = new Object();
+    private final java.util.concurrent.Semaphore outboundBytes =
+            new java.util.concurrent.Semaphore(outboundBudget);
+
+    private final Object admissionLock = new Object();
+    private final Object peerSchedulerLock = new Object();
+
     private final String processName =
             ProcessContext.getProcessName();
 
     private final Set<Socket> activeConnections =
             ConcurrentHashMap.newKeySet();
 
-    private final Object peerSchedulerLock = new Object();
+    // =========================================================
+    // Connection Metrics
+    // =========================================================
 
     private final AtomicLong acceptedConnections = new AtomicLong();
     private final AtomicLong connectionInitializationFailures = new AtomicLong();
@@ -96,11 +105,19 @@ public class TCPService implements Service, HealthCheckable {
     private final AtomicLong clientReadFailures = new AtomicLong();
     private final AtomicLong acceptFailures = new AtomicLong();
 
+    // =========================================================
+    // Message Metrics
+    // =========================================================
+
     private final AtomicLong messagesSubmitted = new AtomicLong();
     private final AtomicLong messagesSent = new AtomicLong();
     private final AtomicLong messagesReceived = new AtomicLong();
     private final AtomicLong messagesFailures = new AtomicLong();
     private final AtomicLong messagesRejection = new AtomicLong();
+
+    // =========================================================
+    // Executor Metrics
+    // =========================================================
 
     private final AtomicLong submittedTasks = new AtomicLong();
     private final AtomicLong completedTasks = new AtomicLong();
@@ -114,12 +131,21 @@ public class TCPService implements Service, HealthCheckable {
     private long lastReportedRejectedTasks;
     private long lastReportedAcceptFailures;
 
+    // =========================================================
+    // Runtime Resources
+    // =========================================================
+
     private ExecutorService tcpWorkers;
     private ScheduledExecutorService backgroundJobScheduler;
+
     private Thread listenerThread;
     private ServerSocket serverSocket;
 
     private volatile boolean isQuiescing;
+
+    // =========================================================
+    // Constructors
+    // =========================================================
 
     public TCPService(
             int coreThreads,
@@ -130,6 +156,7 @@ public class TCPService implements Service, HealthCheckable {
             boolean hasServerSocket,
             TCPProcessor tcpProcessor
     ) {
+
         this(
                 coreThreads,
                 maxThreads,
@@ -152,14 +179,41 @@ public class TCPService implements Service, HealthCheckable {
             boolean hasServerSocket,
             TCPProcessor tcpProcessor
     ) {
-        this(coreThreads, maxThreads, idleTimeout, bindHost, tcpPort, tcpBacklog, hasServerSocket,
-                tcpProcessor, Integer.getInteger("mediation.tcp.max-frame-chars", 65536));
+
+        this(
+                coreThreads,
+                maxThreads,
+                idleTimeout,
+                bindHost,
+                tcpPort,
+                tcpBacklog,
+                hasServerSocket,
+                tcpProcessor,
+                Integer.getInteger(
+                        "mediation.tcp.max-frame-chars",
+                        65536
+                )
+        );
     }
 
-    public TCPService(int coreThreads, int maxThreads, long idleTimeout, String bindHost,
-                      int tcpPort, int tcpBacklog, boolean hasServerSocket, TCPProcessor tcpProcessor,
-                      int maxFrameChars) {
-        if (maxFrameChars < 1) throw new IllegalArgumentException("Frame limit must be positive");
+    public TCPService(
+            int coreThreads,
+            int maxThreads,
+            long idleTimeout,
+            String bindHost,
+            int tcpPort,
+            int tcpBacklog,
+            boolean hasServerSocket,
+            TCPProcessor tcpProcessor,
+            int maxFrameChars
+    ) {
+
+        if (maxFrameChars < 1) {
+            throw new IllegalArgumentException(
+                    "Frame limit must be positive"
+            );
+        }
+
         this.maxFrameChars = maxFrameChars;
 
         log.debug(() ->
@@ -172,24 +226,90 @@ public class TCPService implements Service, HealthCheckable {
                         + " | tcpPort=" + tcpPort
                         + " | tcpBacklog=" + tcpBacklog
                         + " | hasServerSocket=" + hasServerSocket
+                        + " | maxFrameChars=" + maxFrameChars
+                        + " | outboundBudget=" + outboundBudget
         );
 
-        this.isQuiescing            = true;
-        this.coreThreads            = coreThreads;
-        this.maxThreads             = maxThreads;
-        this.idleTimeout            = idleTimeout;
-        this.bindHost               = Objects.requireNonNull(bindHost, "bindHost");
-        this.tcpPort                = tcpPort;
-        this.tcpBacklog             = tcpBacklog;
-        this.hasServerSocket        = hasServerSocket;
-        this.tcpProcessor           = tcpProcessor;
+        this.isQuiescing = true;
+
+        this.coreThreads = coreThreads;
+        this.maxThreads = maxThreads;
+        this.idleTimeout = idleTimeout;
+
+        this.bindHost = Objects.requireNonNull(
+                bindHost,
+                "bindHost"
+        );
+
+        this.tcpPort = tcpPort;
+        this.tcpBacklog = tcpBacklog;
+        this.hasServerSocket = hasServerSocket;
+        this.tcpProcessor = tcpProcessor;
 
         log.info(() ->
                 "[TCPService][constructor] TCPService initialized"
                         + " | processName=" + processName
                         + " | tcpPort=" + tcpPort
                         + " | hasServerSocket=" + hasServerSocket
+                        + " | processorType="
+                        + (tcpProcessor == null
+                        ? "null"
+                        : tcpProcessor.getClass().getSimpleName())
         );
+    }
+
+    // =========================================================
+    // Connection Diagnostics
+    // =========================================================
+
+    public List<Map<String, Object>> connectionDetails() {
+
+        log.debug(() ->
+                "[TCPService][connectionDetails] Collecting connection details"
+                        + " | activeConnections=" + activeConnections.size()
+        );
+
+        Set<Socket> sockets = new HashSet<>(activeConnections);
+
+        sockets.addAll(tcpProcessor.connectedSockets());
+
+        List<Map<String, Object>> details =
+                sockets.stream()
+                        .filter(socket -> !socket.isClosed())
+                        .map(socket -> {
+
+                            Map<String, Object> row =
+                                    new LinkedHashMap<>();
+
+                            row.put(
+                                    "local",
+                                    String.valueOf(socket.getLocalSocketAddress())
+                            );
+
+                            row.put(
+                                    "remote",
+                                    String.valueOf(socket.getRemoteSocketAddress())
+                            );
+
+                            row.put(
+                                    "state",
+                                    socket.isConnected()
+                                            ? "CONNECTED"
+                                            : "CONNECTING"
+                            );
+
+                            row.put("service", getName());
+
+                            return row;
+                        })
+                        .toList();
+
+        log.debug(() ->
+                "[TCPService][connectionDetails] Connection details collected"
+                        + " | totalConnections=" + details.size()
+        );
+
+        return details;
     }
 
     /*
@@ -199,8 +319,7 @@ public class TCPService implements Service, HealthCheckable {
     // the tcp listener thread will be constantly listen on this port, and accepting connections. Once a connection is accepted
     // the listener thread will submit the socket to tcpWorker pool for it to handle and it will return back to listening.
 
-    public void listenOnServerSocket(
-    ) {
+    public void listenOnServerSocket() {
 
         log.info(() ->
                 "[TCPService][listenOnServerSocket] TCP listener started"
@@ -214,24 +333,35 @@ public class TCPService implements Service, HealthCheckable {
 
             try {
 
-                log.debug(()->
+                log.debug(() ->
                         "[TCPService][listenOnServerSocket] Waiting for incoming TCP connection"
+                                + " | tcpPort=" + tcpPort
                 );
 
                 clientSocket = serverSocket.accept();
 
-                long connectionCount = acceptedConnections.incrementAndGet();
+                long connectionCount =
+                        acceptedConnections.incrementAndGet();
 
                 clientSocket.setKeepAlive(true);
-                if (tcpProcessor instanceof org.prats.processors.TCPApplicationProcessor) {
-                    clientSocket.setSoTimeout(Integer.getInteger("mediation.tcp.read-idle-seconds", 300) * 1000);
+
+                if (tcpProcessor instanceof
+                        org.prats.processors.TCPApplicationProcessor) {
+
+                    clientSocket.setSoTimeout(
+                            Integer.getInteger(
+                                    "mediation.tcp.read-idle-seconds",
+                                    300
+                            ) * 1000
+                    );
                 }
 
                 Socket acceptedSocket = clientSocket;
 
                 log.debug(() ->
                         "[TCPService][listenOnServerSocket] TCP connection accepted"
-                                + " | remoteAddress=" + acceptedSocket.getRemoteSocketAddress()
+                                + " | remoteAddress="
+                                + acceptedSocket.getRemoteSocketAddress()
                                 + " | acceptedConnections=" + connectionCount
                 );
 
@@ -239,26 +369,47 @@ public class TCPService implements Service, HealthCheckable {
 
                     if (isQuiescing) {
 
-                        log.debug("[TCPService][listenOnServerSocket] Closing accepted connection because service is quiescing");
+                        log.debug(
+                                "[TCPService][listenOnServerSocket] "
+                                        + "Closing accepted connection because service is quiescing"
+                        );
 
                         closeQuietly(clientSocket);
-
                         break;
                     }
 
-                    if (activeConnections.size() >= Integer.getInteger("mediation.tcp.max-connections", 256)) {
-                        connectionTaskRejections.incrementAndGet();
-                        log.warn("[TCPService][listenOnServerSocket] Connection limit reached; closing excess connection");
+                    int maxConnections =
+                            Integer.getInteger(
+                                    "mediation.tcp.max-connections",
+                                    256
+                            );
+
+                    if (activeConnections.size() >= maxConnections) {
+
+                        long rejectionCount =
+                                connectionTaskRejections.incrementAndGet();
+
+                        log.warn(() ->
+                                "[TCPService][listenOnServerSocket] Connection limit reached"
+                                        + " | maxConnections=" + maxConnections
+                                        + " | activeConnections=" + activeConnections.size()
+                                        + " | rejectionCount=" + rejectionCount
+                                        + " | remoteAddress="
+                                        + acceptedSocket.getRemoteSocketAddress()
+                        );
+
                         closeQuietly(clientSocket);
                         continue;
                     }
+
                     activeConnections.add(clientSocket);
 
                     try {
 
                         log.debug(() ->
                                 "[TCPService][listenOnServerSocket] Submitting accepted connection"
-                                        + " | remoteAddress=" + acceptedSocket.getRemoteSocketAddress()
+                                        + " | remoteAddress="
+                                        + acceptedSocket.getRemoteSocketAddress()
                                         + " | activeConnections=" + activeConnections.size()
                         );
 
@@ -268,15 +419,16 @@ public class TCPService implements Service, HealthCheckable {
 
                     } catch (RejectedExecutionException exception) {
 
-                        long rejectionCount = connectionTaskRejections.incrementAndGet();
+                        long rejectionCount =
+                                connectionTaskRejections.incrementAndGet();
 
                         activeConnections.remove(acceptedSocket);
-
                         closeQuietly(acceptedSocket);
 
                         log.warn(() ->
                                 "[TCPService][listenOnServerSocket] Connection rejected by TCP worker executor"
-                                        + " | remoteAddress=" + acceptedSocket.getRemoteSocketAddress()
+                                        + " | remoteAddress="
+                                        + acceptedSocket.getRemoteSocketAddress()
                                         + " | connectionTaskRejections=" + rejectionCount
                                         + " | exception=" + exception
                         );
@@ -287,11 +439,13 @@ public class TCPService implements Service, HealthCheckable {
 
                 if (!isQuiescing) {
 
-                    long failureCount = acceptFailures.incrementAndGet();
+                    long failureCount =
+                            acceptFailures.incrementAndGet();
 
                     log.error(
                             "[TCPService][listenOnServerSocket] TCP connection acceptance failed"
-                                    + " | acceptFailures=" + failureCount,
+                                    + " | acceptFailures=" + failureCount
+                                    + " | tcpPort=" + tcpPort,
                             exception
                     );
                 }
@@ -308,24 +462,60 @@ public class TCPService implements Service, HealthCheckable {
         );
     }
 
-    private String readBoundedLine(BufferedReader reader) throws IOException {
+    // =========================================================
+    // Bounded Message Reading
+    // =========================================================
+
+    private String readBoundedLine(
+            BufferedReader reader
+    ) throws IOException {
+
         int limit = maxFrameChars;
+
         StringBuilder line = new StringBuilder();
+
         int value;
+
         while ((value = reader.read()) != -1) {
-            if (value == '\n') return line.toString();
-            if (value == '\r') continue;
-            if (line.length() >= limit) throw new IOException("TCP frame exceeds configured size limit");
+
+            if (value == '\n') {
+                return line.toString();
+            }
+
+            if (value == '\r') {
+                continue;
+            }
+
+            if (line.length() >= limit) {
+
+                log.warn(() ->
+                        "[TCPService][readBoundedLine] Incoming TCP frame exceeded configured limit"
+                                + " | maxFrameChars=" + limit
+                );
+
+                throw new IOException(
+                        "TCP frame exceeds configured size limit"
+                );
+            }
+
             line.append((char) value);
         }
-        return line.isEmpty() ? null : line.toString();
+
+        return line.isEmpty()
+                ? null
+                : line.toString();
     }
+
+    // =========================================================
+    // Accepted Client Initialization
+    // =========================================================
 
     private void acceptClient(Socket clientSocket) {
 
         log.debug(() ->
                 "[TCPService][acceptClient] Initializing client connection"
-                        + " | remoteAddress=" + clientSocket.getRemoteSocketAddress()
+                        + " | remoteAddress="
+                        + clientSocket.getRemoteSocketAddress()
         );
 
         try {
@@ -335,14 +525,16 @@ public class TCPService implements Service, HealthCheckable {
 
             log.debug(() ->
                     "[TCPService][acceptClient] Client connection initialized"
-                            + " | remoteAddress=" + clientSocket.getRemoteSocketAddress()
+                            + " | remoteAddress="
+                            + clientSocket.getRemoteSocketAddress()
             );
 
             handleClient(connection);
 
         } catch (IOException exception) {
 
-            long failureCount = connectionInitializationFailures.incrementAndGet();
+            long failureCount =
+                    connectionInitializationFailures.incrementAndGet();
 
             log.error(
                     "[TCPService][acceptClient] Client initialization failed"
@@ -358,7 +550,8 @@ public class TCPService implements Service, HealthCheckable {
 
             log.debug(() ->
                     "[TCPService][acceptClient] Client connection processing finished"
-                            + " | remoteAddress=" + clientSocket.getRemoteSocketAddress()
+                            + " | remoteAddress="
+                            + clientSocket.getRemoteSocketAddress()
                             + " | activeConnections=" + activeConnections.size()
             );
         }
@@ -366,12 +559,18 @@ public class TCPService implements Service, HealthCheckable {
 
     // reads incoming messages from one client, a tcp virtual thread gets assigned to it which is responsible to handle this
     // client and all the messages that are associated with it
-    private void handleClient(ClientConnection clientConnection) {
 
-        log.debug("[TCPService][handleClient] Client message handling started");
+    private void handleClient(
+            ClientConnection clientConnection
+    ) {
+
+        log.debug(
+                "[TCPService][handleClient] Client message handling started"
+        );
 
         try (
                 Socket socket = clientConnection.getSocket();
+
                 BufferedReader reader = new BufferedReader(
                         new InputStreamReader(
                                 socket.getInputStream(),
@@ -382,7 +581,8 @@ public class TCPService implements Service, HealthCheckable {
 
             log.debug(() ->
                     "[TCPService][handleClient] Client socket opened for reading"
-                            + " | remoteAddress=" + socket.getRemoteSocketAddress()
+                            + " | remoteAddress="
+                            + socket.getRemoteSocketAddress()
             );
 
             String rawMessage;
@@ -390,7 +590,8 @@ public class TCPService implements Service, HealthCheckable {
             while (!isQuiescing &&
                     (rawMessage = readBoundedLine(reader)) != null) {
 
-                long receivedCount = messagesReceived.incrementAndGet();
+                long receivedCount =
+                        messagesReceived.incrementAndGet();
 
                 final int messageLength = rawMessage.length();
 
@@ -398,7 +599,8 @@ public class TCPService implements Service, HealthCheckable {
                         "[TCPService][handleClient] Message received from client"
                                 + " | messageLength=" + messageLength
                                 + " | messagesReceived=" + receivedCount
-                                + " | remoteAddress=" + socket.getRemoteSocketAddress()
+                                + " | remoteAddress="
+                                + socket.getRemoteSocketAddress()
                 );
 
                 try {
@@ -408,7 +610,8 @@ public class TCPService implements Service, HealthCheckable {
                             clientConnection
                     );
 
-                    long submittedCount = messagesSubmitted.incrementAndGet();
+                    long submittedCount =
+                            messagesSubmitted.incrementAndGet();
 
                     log.debug(() ->
                             "[TCPService][handleClient] Incoming message submitted to TCP processor"
@@ -418,7 +621,8 @@ public class TCPService implements Service, HealthCheckable {
 
                 } catch (RejectedExecutionException exception) {
 
-                    long rejectionCount = messagesRejection.incrementAndGet();
+                    long rejectionCount =
+                            messagesRejection.incrementAndGet();
 
                     log.warn(() ->
                             "[TCPService][handleClient] Message submission rejected"
@@ -438,13 +642,15 @@ public class TCPService implements Service, HealthCheckable {
 
             log.debug(() ->
                     "[TCPService][handleClient] Client read loop completed"
-                            + " | remoteAddress=" + socket.getRemoteSocketAddress()
+                            + " | remoteAddress="
+                            + socket.getRemoteSocketAddress()
                             + " | isQuiescing=" + isQuiescing
             );
 
         } catch (IOException exception) {
 
-            long failureCount = clientReadFailures.incrementAndGet();
+            long failureCount =
+                    clientReadFailures.incrementAndGet();
 
             if (!isQuiescing) {
 
@@ -472,11 +678,15 @@ public class TCPService implements Service, HealthCheckable {
 
                 if (tcpProcessor != null) {
 
-                    log.debug("[TCPService][handleClient] Notifying TCP processor about closed connection");
+                    log.debug(
+                            "[TCPService][handleClient] Notifying TCP processor about closed connection"
+                    );
 
                     tcpProcessor.onConnectionClosed(clientConnection);
 
-                    log.debug("[TCPService][handleClient] TCP processor notified about closed connection");
+                    log.debug(
+                            "[TCPService][handleClient] TCP processor notified about closed connection"
+                    );
                 }
 
             } catch (Exception exception) {
@@ -487,12 +697,15 @@ public class TCPService implements Service, HealthCheckable {
                 );
             }
 
-            log.debug("[TCPService][handleClient] Client handling completed");
+            log.debug(
+                    "[TCPService][handleClient] Client handling completed"
+            );
         }
     }
 
     // writes the message on the given connection. the internal call is synchronized so we only have one
     // thread writing on a socket at a time.
+
     public CompletableFuture<Void> writeMessage(
             String message,
             ClientConnection clientConnection
@@ -500,13 +713,17 @@ public class TCPService implements Service, HealthCheckable {
 
         log.debug(() ->
                 "[TCPService][writeMessage] Outgoing message write requested"
-                        + " | messageLength=" + (message == null ? -1 : message.length())
-                        + " | clientConnectionPresent=" + (clientConnection != null)
+                        + " | messageLength="
+                        + (message == null ? -1 : message.length())
+                        + " | clientConnectionPresent="
+                        + (clientConnection != null)
                         + " | outboundBudget=" + outboundBudget
-                        + " | availableOutboundBytes=" + outboundBytes.availablePermits()
+                        + " | availableOutboundBytes="
+                        + outboundBytes.availablePermits()
         );
 
-        CompletableFuture<Void> completion = new CompletableFuture<>();
+        CompletableFuture<Void> completion =
+                new CompletableFuture<>();
 
         /*
          * Estimate the memory retained by the outgoing message.
@@ -521,23 +738,27 @@ public class TCPService implements Service, HealthCheckable {
                 "[TCPService][writeMessage] Evaluating outbound byte budget"
                         + " | estimatedBytes=" + estimatedBytes
                         + " | outboundBudget=" + outboundBudget
-                        + " | availablePermits=" + outboundBytes.availablePermits()
+                        + " | availablePermits="
+                        + outboundBytes.availablePermits()
         );
 
         /*
          * Reject writes that exceed the configured outbound
          * memory budget or cannot acquire sufficient permits.
          */
-        if (estimatedBytes > outboundBudget || !outboundBytes.tryAcquire((int) estimatedBytes)) {
+        if (estimatedBytes > outboundBudget ||
+                !outboundBytes.tryAcquire((int) estimatedBytes)) {
 
-            long rejectionCount = messagesRejection.incrementAndGet();
+            long rejectionCount =
+                    messagesRejection.incrementAndGet();
 
             log.warn(() ->
                     "[TCPService][writeMessage] Outbound write rejected"
                             + " | reason=OUTBOUND_BYTE_BUDGET_EXCEEDED"
                             + " | estimatedBytes=" + estimatedBytes
                             + " | outboundBudget=" + outboundBudget
-                            + " | availablePermits=" + outboundBytes.availablePermits()
+                            + " | availablePermits="
+                            + outboundBytes.availablePermits()
                             + " | messagesRejection=" + rejectionCount
             );
 
@@ -551,7 +772,8 @@ public class TCPService implements Service, HealthCheckable {
         log.debug(() ->
                 "[TCPService][writeMessage] Outbound byte permits acquired"
                         + " | acquiredPermits=" + estimatedBytes
-                        + " | remainingPermits=" + outboundBytes.availablePermits()
+                        + " | remainingPermits="
+                        + outboundBytes.availablePermits()
         );
 
         /*
@@ -586,27 +808,30 @@ public class TCPService implements Service, HealthCheckable {
                     log.debug(() ->
                             "[TCPService][writeMessage] Outbound byte permits released"
                                     + " | releasedPermits=" + estimatedBytes
-                                    + " | availablePermits=" + outboundBytes.availablePermits()
-                                    + " | completedExceptionally=" + (error != null)
+                                    + " | availablePermits="
+                                    + outboundBytes.availablePermits()
+                                    + " | completedExceptionally="
+                                    + (error != null)
                     );
 
-                    if (error instanceof java.util.concurrent.TimeoutException) {
+                    if (error instanceof TimeoutException) {
 
                         log.warn(() ->
                                 "[TCPService][writeMessage] Outbound write timed out"
                                         + " | timeoutSeconds=" + writeTimeoutSeconds
-                                        + " | clientConnectionPresent=" + (clientConnection != null)
+                                        + " | clientConnectionPresent="
+                                        + (clientConnection != null)
                         );
 
                         if (clientConnection != null) {
 
-                            log.debug(() ->
+                            log.debug(
                                     "[TCPService][writeMessage] Closing slow client connection"
                             );
 
                             closeQuietly(clientConnection.getSocket());
 
-                            log.debug(() ->
+                            log.debug(
                                     "[TCPService][writeMessage] Slow client connection closure requested"
                             );
                         }
@@ -616,13 +841,14 @@ public class TCPService implements Service, HealthCheckable {
 
                         log.debug(() ->
                                 "[TCPService][writeMessage] Completion future finished exceptionally"
-                                        + " | exception=" + error.getClass().getSimpleName()
+                                        + " | exception="
+                                        + error.getClass().getSimpleName()
                                         + " | reason=" + error.getMessage()
                         );
 
                     } else {
 
-                        log.debug(() ->
+                        log.debug(
                                 "[TCPService][writeMessage] Completion future finished successfully"
                         );
                     }
@@ -644,7 +870,8 @@ public class TCPService implements Service, HealthCheckable {
                 log.debug(() ->
                         "[TCPService][writeMessage] Outbound write task started"
                                 + " | thread=" + Thread.currentThread()
-                                + " | messageLength=" + (message == null ? -1 : message.length())
+                                + " | messageLength="
+                                + (message == null ? -1 : message.length())
                 );
 
                 try {
@@ -654,17 +881,20 @@ public class TCPService implements Service, HealthCheckable {
                      */
                     log.debug(() ->
                             "[TCPService][writeMessage] Writing message to client socket"
-                                    + " | messageLength=" + (message == null ? -1 : message.length())
+                                    + " | messageLength="
+                                    + (message == null ? -1 : message.length())
                     );
 
                     clientConnection.sendMessage(message);
 
-                    long sentCount = messagesSent.incrementAndGet();
+                    long sentCount =
+                            messagesSent.incrementAndGet();
 
                     log.debug(() ->
                             "[TCPService][writeMessage] Socket write completed successfully"
                                     + " | messagesSent=" + sentCount
-                                    + " | messageLength=" + (message == null ? -1 : message.length())
+                                    + " | messageLength="
+                                    + (message == null ? -1 : message.length())
                     );
 
                     /*
@@ -674,18 +904,21 @@ public class TCPService implements Service, HealthCheckable {
                      * was already completed, for example,
                      * because its timeout elapsed.
                      */
-                    boolean completedNow = completion.complete(null);
+                    boolean completedNow =
+                            completion.complete(null);
 
                     log.debug(() ->
                             "[TCPService][writeMessage] Write completion attempted"
                                     + " | completedNow=" + completedNow
                                     + " | futureDone=" + completion.isDone()
-                                    + " | completedExceptionally=" + completion.isCompletedExceptionally()
+                                    + " | completedExceptionally="
+                                    + completion.isCompletedExceptionally()
                     );
 
                 } catch (Exception exception) {
 
-                    long failureCount = messagesFailures.incrementAndGet();
+                    long failureCount =
+                            messagesFailures.incrementAndGet();
 
                     boolean completedNow =
                             completion.completeExceptionally(exception);
@@ -693,9 +926,11 @@ public class TCPService implements Service, HealthCheckable {
                     log.error(
                             "[TCPService][writeMessage] Outbound socket write failed"
                                     + " | messagesFailures=" + failureCount
-                                    + " | messageLength=" + (message == null ? -1 : message.length())
+                                    + " | messageLength="
+                                    + (message == null ? -1 : message.length())
                                     + " | futureCompletedNow=" + completedNow
-                                    + " | exception=" + exception.getClass().getSimpleName(),
+                                    + " | exception="
+                                    + exception.getClass().getSimpleName(),
                             exception
                     );
 
@@ -704,18 +939,21 @@ public class TCPService implements Service, HealthCheckable {
                     log.debug(() ->
                             "[TCPService][writeMessage] Outbound write task finalized"
                                     + " | futureDone=" + completion.isDone()
-                                    + " | completedExceptionally=" + completion.isCompletedExceptionally()
+                                    + " | completedExceptionally="
+                                    + completion.isCompletedExceptionally()
                     );
                 }
             });
 
-            long submittedCount = messagesSubmitted.incrementAndGet();
+            long submittedCount =
+                    messagesSubmitted.incrementAndGet();
 
             log.debug(() ->
                     "[TCPService][writeMessage] Outbound write task submitted successfully"
                             + " | messagesSubmitted=" + submittedCount
                             + " | estimatedBytes=" + estimatedBytes
-                            + " | availableOutboundBytes=" + outboundBytes.availablePermits()
+                            + " | availableOutboundBytes="
+                            + outboundBytes.availablePermits()
             );
 
         } catch (RejectedExecutionException exception) {
@@ -727,7 +965,8 @@ public class TCPService implements Service, HealthCheckable {
              * the registered completion handler, which releases
              * the outbound byte permits.
              */
-            long rejectionCount = messagesRejection.incrementAndGet();
+            long rejectionCount =
+                    messagesRejection.incrementAndGet();
 
             boolean completedNow =
                     completion.completeExceptionally(exception);
@@ -737,7 +976,8 @@ public class TCPService implements Service, HealthCheckable {
                             + " | messagesRejection=" + rejectionCount
                             + " | estimatedBytes=" + estimatedBytes
                             + " | futureCompletedNow=" + completedNow
-                            + " | exception=" + exception.getClass().getSimpleName()
+                            + " | exception="
+                            + exception.getClass().getSimpleName()
                             + " | reason=" + exception.getMessage()
             );
         }
@@ -745,7 +985,8 @@ public class TCPService implements Service, HealthCheckable {
         log.debug(() ->
                 "[TCPService][writeMessage] Returning asynchronous completion future"
                         + " | futureDone=" + completion.isDone()
-                        + " | completedExceptionally=" + completion.isCompletedExceptionally()
+                        + " | completedExceptionally="
+                        + completion.isCompletedExceptionally()
         );
 
         return completion;
@@ -766,9 +1007,17 @@ public class TCPService implements Service, HealthCheckable {
         );
 
         Map<String, Object> metrics = new LinkedHashMap<>();
-        metrics.put("outboundRetainedBytes", outboundBudget - outboundBytes.availablePermits());
+
+        metrics.put(
+                "outboundRetainedBytes",
+                outboundBudget - outboundBytes.availablePermits()
+        );
+
         metrics.put("outboundByteLimit", outboundBudget);
-        metrics.putAll(org.prats.threading.ThreadPool.admissionMetrics(tcpWorkers));
+
+        metrics.putAll(
+                ThreadPool.admissionMetrics(tcpWorkers)
+        );
 
         metrics.put("isQuiescing", isQuiescing);
         metrics.put("serverSocketRequired", hasServerSocket);
@@ -776,46 +1025,125 @@ public class TCPService implements Service, HealthCheckable {
         metrics.put("tcpPort", tcpPort);
         metrics.put("tcpBacklog", tcpBacklog);
 
-        metrics.put("serverSocketInitialized", serverSocket != null);
-        metrics.put("serverSocketBound",
-                serverSocket != null && serverSocket.isBound());
-        metrics.put("serverSocketClosed",
-                serverSocket == null || serverSocket.isClosed());
+        metrics.put(
+                "serverSocketInitialized",
+                serverSocket != null
+        );
 
-        metrics.put("listenerInitialized", listenerThread != null);
-        metrics.put("listenerAlive",
-                listenerThread != null && listenerThread.isAlive());
+        metrics.put(
+                "serverSocketBound",
+                serverSocket != null && serverSocket.isBound()
+        );
 
-        metrics.put("executorInitialized", tcpWorkers != null);
+        metrics.put(
+                "serverSocketClosed",
+                serverSocket == null || serverSocket.isClosed()
+        );
 
-        metrics.put("executorShutdown",
-                tcpWorkers != null && tcpWorkers.isShutdown());
-        metrics.put("executorTerminated",
-                tcpWorkers != null && tcpWorkers.isTerminated());
+        metrics.put(
+                "listenerInitialized",
+                listenerThread != null
+        );
 
-        metrics.put("acceptedConnections", acceptedConnections.get());
-        metrics.put("activeConnections", activeConnections.size());
+        metrics.put(
+                "listenerAlive",
+                listenerThread != null && listenerThread.isAlive()
+        );
 
-        metrics.put("connectionInitializationFailures",
-                connectionInitializationFailures.get());
-        metrics.put("connectionTaskRejections",
-                connectionTaskRejections.get());
-        metrics.put("clientReadFailures",
-                clientReadFailures.get());
-        metrics.put("acceptFailures", acceptFailures.get());
+        metrics.put(
+                "executorInitialized",
+                tcpWorkers != null
+        );
 
-        metrics.put("messagesSubmitted", messagesSubmitted.get());
-        metrics.put("messagesSent", messagesSent.get());
-        metrics.put("messagesFailures", messagesFailures.get());
-        metrics.put("messagesRejection", messagesRejection.get());
+        metrics.put(
+                "executorShutdown",
+                tcpWorkers != null && tcpWorkers.isShutdown()
+        );
 
-        metrics.put("submittedTasks", submittedTasks.get());
-        metrics.put("completedTasks", completedTasks.get());
-        metrics.put("failedTasks", failedTasks.get());
-        metrics.put("rejectedTasks", rejectedTasks.get());
+        metrics.put(
+                "executorTerminated",
+                tcpWorkers != null && tcpWorkers.isTerminated()
+        );
 
-        metrics.put("activeTasks", activeTasks.get());
-        metrics.put("outstandingTasks", outstandingTasks.get());
+        metrics.put(
+                "acceptedConnections",
+                acceptedConnections.get()
+        );
+
+        metrics.put(
+                "activeConnections",
+                activeConnections.size()
+        );
+
+        metrics.put(
+                "connectionInitializationFailures",
+                connectionInitializationFailures.get()
+        );
+
+        metrics.put(
+                "connectionTaskRejections",
+                connectionTaskRejections.get()
+        );
+
+        metrics.put(
+                "clientReadFailures",
+                clientReadFailures.get()
+        );
+
+        metrics.put(
+                "acceptFailures",
+                acceptFailures.get()
+        );
+
+        metrics.put(
+                "messagesSubmitted",
+                messagesSubmitted.get()
+        );
+
+        metrics.put(
+                "messagesSent",
+                messagesSent.get()
+        );
+
+        metrics.put(
+                "messagesFailures",
+                messagesFailures.get()
+        );
+
+        metrics.put(
+                "messagesRejection",
+                messagesRejection.get()
+        );
+
+        metrics.put(
+                "submittedTasks",
+                submittedTasks.get()
+        );
+
+        metrics.put(
+                "completedTasks",
+                completedTasks.get()
+        );
+
+        metrics.put(
+                "failedTasks",
+                failedTasks.get()
+        );
+
+        metrics.put(
+                "rejectedTasks",
+                rejectedTasks.get()
+        );
+
+        metrics.put(
+                "activeTasks",
+                activeTasks.get()
+        );
+
+        metrics.put(
+                "outstandingTasks",
+                outstandingTasks.get()
+        );
 
         HealthStatus status;
         String message;
@@ -826,24 +1154,36 @@ public class TCPService implements Service, HealthCheckable {
             status = HealthStatus.UNREACHABLE;
             message = "TCP service has not been initialized.";
 
-            log.warn("[TCPService][checkHealth] TCP service has not been initialized");
+            log.warn(
+                    "[TCPService][checkHealth] TCP service has not been initialized"
+            );
 
-        } else if (tcpWorkers.isTerminated() || tcpWorkers.isShutdown()) {
+        } else if (tcpWorkers.isTerminated() ||
+                tcpWorkers.isShutdown()) {
 
             status = HealthStatus.UNHEALTHY;
-            message = "TCP worker executor is no longer operational.";
 
-            log.error("[TCPService][checkHealth] TCP worker executor is no longer operational");
+            message =
+                    "TCP worker executor is no longer operational.";
 
-        } else if (!isQuiescing && hasServerSocket &&
+            log.error(
+                    "[TCPService][checkHealth] TCP worker executor is no longer operational"
+            );
+
+        } else if (!isQuiescing &&
+                hasServerSocket &&
                 (serverSocket.isClosed() ||
                         listenerThread == null ||
                         !listenerThread.isAlive())) {
 
             status = HealthStatus.UNHEALTHY;
-            message = "TCP listener is no longer accepting connections.";
 
-            log.error("[TCPService][checkHealth] TCP listener is no longer accepting connections");
+            message =
+                    "TCP listener is no longer accepting connections.";
+
+            log.error(
+                    "[TCPService][checkHealth] TCP listener is no longer accepting connections"
+            );
 
         } else {
 
@@ -876,9 +1216,12 @@ public class TCPService implements Service, HealthCheckable {
 
                 status = HealthStatus.DEGRADED;
 
-                message = "TCP service is operational but has experienced task failures, connection acceptance failures or message dispatch rejections.";
+                message =
+                        "TCP service is operational but has experienced task failures, connection acceptance failures or message dispatch rejections.";
 
-                log.warn("[TCPService][checkHealth] TCP service is operational but degraded");
+                log.warn(
+                        "[TCPService][checkHealth] TCP service is operational but degraded"
+                );
 
             } else {
 
@@ -886,7 +1229,9 @@ public class TCPService implements Service, HealthCheckable {
 
                 message = "TCP service is operating normally.";
 
-                log.debug("[TCPService][checkHealth] TCP service is healthy");
+                log.debug(
+                        "[TCPService][checkHealth] TCP service is healthy"
+                );
             }
         }
 
@@ -916,7 +1261,10 @@ public class TCPService implements Service, HealthCheckable {
     }
 
     // tries to connect to the given tcp peer, on its specified port and host
-    public ClientConnection attemptConnection(TCPPeer peer) {
+
+    public ClientConnection attemptConnection(
+            TCPPeer peer
+    ) {
 
         String peerId = peer.processId();
 
@@ -953,7 +1301,8 @@ public class TCPService implements Service, HealthCheckable {
             socket.connect(
                     new InetSocketAddress(
                             peer.host(),
-                            peer.port()),
+                            peer.port()
+                    ),
                     5000
             );
 
@@ -961,7 +1310,8 @@ public class TCPService implements Service, HealthCheckable {
 
             connection = new ClientConnection(socket);
 
-            long connectionCount = acceptedConnections.incrementAndGet();
+            long connectionCount =
+                    acceptedConnections.incrementAndGet();
 
             activeConnections.add(socket);
 
@@ -969,7 +1319,8 @@ public class TCPService implements Service, HealthCheckable {
                     "[TCPService][attemptConnection] Peer socket connected"
                             + " | peerId=" + peerId
                             + " | acceptedConnections=" + connectionCount
-                            + " | activeConnections=" + activeConnections.size()
+                            + " | activeConnections="
+                            + activeConnections.size()
             );
 
             ClientConnection finalConnection = connection;
@@ -1007,6 +1358,10 @@ public class TCPService implements Service, HealthCheckable {
      * All service lifecycle functions below
      * */
 
+    // =========================================================
+    // Startup
+    // =========================================================
+
     @Override
     public synchronized void start() {
 
@@ -1018,12 +1373,14 @@ public class TCPService implements Service, HealthCheckable {
                         + " | hasServerSocket=" + hasServerSocket
         );
 
-        if (tcpWorkers != null
-                || backgroundJobScheduler != null
-                || serverSocket != null
-                || listenerThread != null) {
+        if (tcpWorkers != null ||
+                backgroundJobScheduler != null ||
+                serverSocket != null ||
+                listenerThread != null) {
 
-            log.error("[TCPService][start] TCP service is already started or has not fully shut down");
+            log.error(
+                    "[TCPService][start] TCP service is already started or has not fully shut down"
+            );
 
             throw new IllegalStateException(
                     "TCP service is already started or has not fully shut down."
@@ -1046,19 +1403,24 @@ public class TCPService implements Service, HealthCheckable {
                 );
 
                 newServerSocket = new ServerSocket();
+
                 newServerSocket.bind(
-                        new InetSocketAddress(InetAddress.getByName(bindHost), tcpPort),
+                        new InetSocketAddress(
+                                InetAddress.getByName(bindHost),
+                                tcpPort
+                        ),
                         tcpBacklog
                 );
 
-                final ServerSocket initializedServerSocket = newServerSocket;
+                final ServerSocket initializedServerSocket =
+                        newServerSocket;
 
                 log.info(() ->
                         "[TCPService][start] Server socket initialized"
-                                + " | localAddress=" + initializedServerSocket.getLocalSocketAddress()
+                                + " | localAddress="
+                                + initializedServerSocket.getLocalSocketAddress()
                 );
             }
-
 
             log.debug(() ->
                     "[TCPService][start] Initializing TCP worker executor"
@@ -1067,22 +1429,27 @@ public class TCPService implements Service, HealthCheckable {
                             + " | idleTimeout=" + idleTimeout
             );
 
-            newTcpWorkers = new ThreadPool().initializeAndGetThreadPool(
-                    coreThreads,
-                    maxThreads,
-                    idleTimeout,
-                    false
+            newTcpWorkers =
+                    new ThreadPool().initializeAndGetThreadPool(
+                            coreThreads,
+                            maxThreads,
+                            idleTimeout,
+                            false
+                    );
+
+            log.info(
+                    "[TCPService][start] TCP worker executor initialized"
             );
 
-            log.info("[TCPService][start] TCP worker executor initialized");
-
-
-            log.debug("[TCPService][start] Initializing background job scheduler");
+            log.debug(
+                    "[TCPService][start] Initializing background job scheduler"
+            );
 
             newScheduler = new ScheduledThreadPoolExecutor(1);
 
-            log.info("[TCPService][start] Background job scheduler initialized");
-
+            log.info(
+                    "[TCPService][start] Background job scheduler initialized"
+            );
 
             tcpWorkers = newTcpWorkers;
             backgroundJobScheduler = newScheduler;
@@ -1090,7 +1457,8 @@ public class TCPService implements Service, HealthCheckable {
 
             if (hasServerSocket) {
 
-                ServerSocket listeningSocket = newServerSocket;
+                ServerSocket listeningSocket =
+                        newServerSocket;
 
                 newListener = new Thread(
                         this::listenOnServerSocket,
@@ -1099,21 +1467,27 @@ public class TCPService implements Service, HealthCheckable {
 
                 listenerThread = newListener;
 
-                final Thread initializedListener = newListener;
+                final Thread initializedListener =
+                        newListener;
 
                 log.debug(() ->
                         "[TCPService][start] Server socket listener thread initialized"
-                                + " | threadName=" + initializedListener.getName()
-                                + " | localAddress=" + listeningSocket.getLocalSocketAddress()
+                                + " | threadName="
+                                + initializedListener.getName()
+                                + " | localAddress="
+                                + listeningSocket.getLocalSocketAddress()
                 );
             }
 
             isQuiescing = false;
 
-            log.debug("[TCPService][start] TCPService admission enabled");
+            log.debug(
+                    "[TCPService][start] TCPService admission enabled"
+            );
 
-
-            log.debug("[TCPService][start] Scheduling cleanup job");
+            log.debug(
+                    "[TCPService][start] Scheduling cleanup job"
+            );
 
             newScheduler.scheduleWithFixedDelay(
                     this::triggerCleanup,
@@ -1122,10 +1496,13 @@ public class TCPService implements Service, HealthCheckable {
                     TimeUnit.SECONDS
             );
 
-            log.info("[TCPService][start] Cleanup job scheduled successfully");
+            log.info(
+                    "[TCPService][start] Cleanup job scheduled successfully"
+            );
 
-
-            log.debug("[TCPService][start] Scheduling peer reconciliation job");
+            log.debug(
+                    "[TCPService][start] Scheduling peer reconciliation job"
+            );
 
             newScheduler.scheduleWithFixedDelay(
                     this::triggerReconcilePeer,
@@ -1134,16 +1511,21 @@ public class TCPService implements Service, HealthCheckable {
                     TimeUnit.SECONDS
             );
 
-            log.info("[TCPService][start] Peer reconciliation job scheduled successfully");
-
+            log.info(
+                    "[TCPService][start] Peer reconciliation job scheduled successfully"
+            );
 
             if (newListener != null) {
 
-                log.debug("[TCPService][start] Starting server socket listener thread");
+                log.debug(
+                        "[TCPService][start] Starting server socket listener thread"
+                );
 
                 newListener.start();
 
-                log.info("[TCPService][start] Server socket listener thread started");
+                log.info(
+                        "[TCPService][start] Server socket listener thread started"
+                );
             }
 
             log.info(
@@ -1159,30 +1541,34 @@ public class TCPService implements Service, HealthCheckable {
 
             isQuiescing = true;
 
-
             closeQuietly(newServerSocket);
 
             if (newListener != null) {
 
-                log.debug("[TCPService][start] Interrupting partially initialized listener thread");
+                log.debug(
+                        "[TCPService][start] Interrupting partially initialized listener thread"
+                );
 
                 newListener.interrupt();
             }
 
             if (newScheduler != null) {
 
-                log.debug("[TCPService][start] Shutting down partially initialized scheduler");
+                log.debug(
+                        "[TCPService][start] Shutting down partially initialized scheduler"
+                );
 
                 newScheduler.shutdownNow();
             }
 
             if (newTcpWorkers != null) {
 
-                log.debug("[TCPService][start] Shutting down partially initialized TCP worker executor");
+                log.debug(
+                        "[TCPService][start] Shutting down partially initialized TCP worker executor"
+                );
 
                 newTcpWorkers.shutdownNow();
             }
-
 
             boolean interrupted = false;
 
@@ -1190,18 +1576,20 @@ public class TCPService implements Service, HealthCheckable {
 
                 if (newListener != null) {
 
-                    log.debug("[TCPService][start] Waiting for listener thread termination");
+                    log.debug(
+                            "[TCPService][start] Waiting for listener thread termination"
+                    );
 
                     newListener.join(5000);
                 }
 
-            } catch (InterruptedException e) {
+            } catch (InterruptedException interruptedException) {
 
                 interrupted = true;
 
                 log.warn(() ->
                         "[TCPService][start] Interrupted while waiting for listener termination"
-                                + " | exception=" + e
+                                + " | exception=" + interruptedException
                 );
             }
 
@@ -1209,18 +1597,23 @@ public class TCPService implements Service, HealthCheckable {
 
                 if (newScheduler != null) {
 
-                    log.debug("[TCPService][start] Waiting for scheduler termination");
+                    log.debug(
+                            "[TCPService][start] Waiting for scheduler termination"
+                    );
 
-                    newScheduler.awaitTermination(5, TimeUnit.SECONDS);
+                    newScheduler.awaitTermination(
+                            5,
+                            TimeUnit.SECONDS
+                    );
                 }
 
-            } catch (InterruptedException e) {
+            } catch (InterruptedException interruptedException) {
 
                 interrupted = true;
 
                 log.warn(() ->
                         "[TCPService][start] Interrupted while waiting for scheduler termination"
-                                + " | exception=" + e
+                                + " | exception=" + interruptedException
                 );
             }
 
@@ -1228,35 +1621,47 @@ public class TCPService implements Service, HealthCheckable {
 
                 if (newTcpWorkers != null) {
 
-                    log.debug("[TCPService][start] Waiting for TCP worker termination");
+                    log.debug(
+                            "[TCPService][start] Waiting for TCP worker termination"
+                    );
 
-                    newTcpWorkers.awaitTermination(5, TimeUnit.SECONDS);
+                    newTcpWorkers.awaitTermination(
+                            5,
+                            TimeUnit.SECONDS
+                    );
                 }
 
-            } catch (InterruptedException e) {
+            } catch (InterruptedException interruptedException) {
 
                 interrupted = true;
 
                 log.warn(() ->
                         "[TCPService][start] Interrupted while waiting for TCP worker termination"
-                                + " | exception=" + e
+                                + " | exception=" + interruptedException
                 );
             }
 
+            if (newServerSocket == null ||
+                    newServerSocket.isClosed()) {
 
-            if (newServerSocket == null || newServerSocket.isClosed()) {
                 serverSocket = null;
             }
 
-            if (newListener == null || !newListener.isAlive()) {
+            if (newListener == null ||
+                    !newListener.isAlive()) {
+
                 listenerThread = null;
             }
 
-            if (newScheduler == null || newScheduler.isTerminated()) {
+            if (newScheduler == null ||
+                    newScheduler.isTerminated()) {
+
                 backgroundJobScheduler = null;
             }
 
-            if (newTcpWorkers == null || newTcpWorkers.isTerminated()) {
+            if (newTcpWorkers == null ||
+                    newTcpWorkers.isTerminated()) {
+
                 tcpWorkers = null;
             }
 
@@ -1276,6 +1681,10 @@ public class TCPService implements Service, HealthCheckable {
         }
     }
 
+    // =========================================================
+    // Drain
+    // =========================================================
+
     @Override
     public void drain(long timeout) {
 
@@ -1289,7 +1698,9 @@ public class TCPService implements Service, HealthCheckable {
         // stop the listener from accepting new connections
         if (listenerThread != null) {
 
-            log.debug("[TCPService][drain] Waiting for listener thread to stop");
+            log.debug(
+                    "[TCPService][drain] Waiting for listener thread to stop"
+            );
 
             try {
 
@@ -1303,13 +1714,14 @@ public class TCPService implements Service, HealthCheckable {
                 );
 
                 Thread.currentThread().interrupt();
-
                 return;
             }
         }
 
         // check for work completion for a certain period
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
+        long deadline =
+                System.nanoTime()
+                        + TimeUnit.MILLISECONDS.toNanos(timeout);
 
         while (hasOutstandingWork()) {
 
@@ -1337,52 +1749,75 @@ public class TCPService implements Service, HealthCheckable {
         );
     }
 
+    // =========================================================
+    // Quiesce
+    // =========================================================
+
     @Override
     public void quiesce() {
 
-        log.info("[TCPService][quiesce] TCPService quiescence requested");
+        log.info(
+                "[TCPService][quiesce] TCPService quiescence requested"
+        );
 
         synchronized (admissionLock) {
-
             isQuiescing = true;
         }
 
-        log.debug("[TCPService][quiesce] TCPService admission disabled");
+        log.debug(
+                "[TCPService][quiesce] TCPService admission disabled"
+        );
 
-        log.info("[TCPService][quiesce] TCPService is now quiescing");
+        log.info(
+                "[TCPService][quiesce] TCPService is now quiescing"
+        );
     }
+
+    // =========================================================
+    // Shutdown
+    // =========================================================
 
     @Override
     public void shutdown() {
 
-        log.info("[TCPService][shutdown] TCPService shutdown requested");
+        log.info(
+                "[TCPService][shutdown] TCPService shutdown requested"
+        );
 
         isQuiescing = true;
 
-        log.debug("[TCPService][shutdown] TCPService admission disabled");
+        log.debug(
+                "[TCPService][shutdown] TCPService admission disabled"
+        );
 
         if (tcpProcessor != null) {
 
-            log.debug("[TCPService][shutdown] Informing TCP processor about shutdown");
+            log.debug(
+                    "[TCPService][shutdown] Informing TCP processor about shutdown"
+            );
 
             tcpProcessor.informShutdown();
         }
 
-        log.debug("[TCPService][shutdown] Closing server socket");
+        log.debug(
+                "[TCPService][shutdown] Closing server socket"
+        );
 
         closeQuietly(serverSocket);
 
-
         if (backgroundJobScheduler != null) {
 
-            log.debug("[TCPService][shutdown] Initiating background scheduler shutdown");
+            log.debug(
+                    "[TCPService][shutdown] Initiating background scheduler shutdown"
+            );
 
             backgroundJobScheduler.shutdown();
         }
 
         log.debug(() ->
                 "[TCPService][shutdown] Closing active client connections"
-                        + " | activeConnections=" + activeConnections.size()
+                        + " | activeConnections="
+                        + activeConnections.size()
         );
 
         for (Socket socket : activeConnections) {
@@ -1391,14 +1826,18 @@ public class TCPService implements Service, HealthCheckable {
 
         if (listenerThread != null) {
 
-            log.debug("[TCPService][shutdown] Interrupting listener thread");
+            log.debug(
+                    "[TCPService][shutdown] Interrupting listener thread"
+            );
 
             listenerThread.interrupt();
         }
 
         if (tcpWorkers != null) {
 
-            log.debug("[TCPService][shutdown] Initiating TCP worker executor shutdown");
+            log.debug(
+                    "[TCPService][shutdown] Initiating TCP worker executor shutdown"
+            );
 
             tcpWorkers.shutdown();
         }
@@ -1409,29 +1848,47 @@ public class TCPService implements Service, HealthCheckable {
 
             if (listenerThread != null) {
 
-                log.debug("[TCPService][shutdown] Waiting for listener thread termination");
+                log.debug(
+                        "[TCPService][shutdown] Waiting for listener thread termination"
+                );
 
                 listenerThread.join(5000);
             }
 
             if (backgroundJobScheduler != null &&
-                    !backgroundJobScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    !backgroundJobScheduler.awaitTermination(
+                            5,
+                            TimeUnit.SECONDS
+                    )) {
 
-                log.warn("[TCPService][shutdown] Background scheduler did not terminate within graceful shutdown period");
+                log.warn(
+                        "[TCPService][shutdown] Background scheduler did not terminate within graceful shutdown period"
+                );
 
                 backgroundJobScheduler.shutdownNow();
 
-                backgroundJobScheduler.awaitTermination(5, TimeUnit.SECONDS);
+                backgroundJobScheduler.awaitTermination(
+                        5,
+                        TimeUnit.SECONDS
+                );
             }
 
             if (tcpWorkers != null &&
-                    !tcpWorkers.awaitTermination(5, TimeUnit.SECONDS)) {
+                    !tcpWorkers.awaitTermination(
+                            5,
+                            TimeUnit.SECONDS
+                    )) {
 
-                log.warn("[TCPService][shutdown] TCP workers did not terminate within graceful shutdown period");
+                log.warn(
+                        "[TCPService][shutdown] TCP workers did not terminate within graceful shutdown period"
+                );
 
                 tcpWorkers.shutdownNow();
 
-                tcpWorkers.awaitTermination(5, TimeUnit.SECONDS);
+                tcpWorkers.awaitTermination(
+                        5,
+                        TimeUnit.SECONDS
+                );
             }
 
         } catch (InterruptedException exception) {
@@ -1453,13 +1910,19 @@ public class TCPService implements Service, HealthCheckable {
         }
 
         boolean terminated =
-                (listenerThread == null || !listenerThread.isAlive()) &&
-                        (backgroundJobScheduler == null || backgroundJobScheduler.isTerminated()) &&
-                        (tcpWorkers == null || tcpWorkers.isTerminated());
+                (listenerThread == null ||
+                        !listenerThread.isAlive())
+                        &&
+                        (backgroundJobScheduler == null ||
+                                backgroundJobScheduler.isTerminated())
+                        &&
+                        (tcpWorkers == null ||
+                                tcpWorkers.isTerminated());
 
         if (terminated) {
 
             activeConnections.clear();
+
             serverSocket = null;
             listenerThread = null;
             backgroundJobScheduler = null;
@@ -1487,6 +1950,7 @@ public class TCPService implements Service, HealthCheckable {
 
     // no quiesce check here as this is an internal function, we  assume service must have checked
     // the quiescing state before accepting work from external threads
+
     private void submitToThreadPool(Runnable task) {
 
         log.debug(() ->
@@ -1497,7 +1961,8 @@ public class TCPService implements Service, HealthCheckable {
 
         try {
 
-            long outstandingCount = outstandingTasks.incrementAndGet();
+            long outstandingCount =
+                    outstandingTasks.incrementAndGet();
 
             log.debug(() ->
                     "[TCPService][submitToThreadPool] Outstanding task counter incremented"
@@ -1506,23 +1971,28 @@ public class TCPService implements Service, HealthCheckable {
 
             tcpWorkers.submit(() -> {
 
-                int currentActiveTasks = activeTasks.incrementAndGet();
+                int currentActiveTasks =
+                        activeTasks.incrementAndGet();
 
                 log.debug(() ->
                         "[TCPService][submitToThreadPool] Worker task started"
                                 + " | activeTasks=" + currentActiveTasks
-                                + " | outstandingTasks=" + outstandingTasks.get()
+                                + " | outstandingTasks="
+                                + outstandingTasks.get()
                 );
 
                 try {
 
                     task.run();
 
-                    log.debug("[TCPService][submitToThreadPool] Worker task execution completed");
+                    log.debug(
+                            "[TCPService][submitToThreadPool] Worker task execution completed"
+                    );
 
                 } catch (Exception exception) {
 
-                    long failureCount = failedTasks.incrementAndGet();
+                    long failureCount =
+                            failedTasks.incrementAndGet();
 
                     log.error(
                             "[TCPService][submitToThreadPool] Worker task failed"
@@ -1534,11 +2004,14 @@ public class TCPService implements Service, HealthCheckable {
 
                 } finally {
 
-                    long completionCount = completedTasks.incrementAndGet();
+                    long completionCount =
+                            completedTasks.incrementAndGet();
 
-                    int remainingActiveTasks = activeTasks.decrementAndGet();
+                    int remainingActiveTasks =
+                            activeTasks.decrementAndGet();
 
-                    int remainingOutstandingTasks = outstandingTasks.decrementAndGet();
+                    int remainingOutstandingTasks =
+                            outstandingTasks.decrementAndGet();
 
                     log.debug(() ->
                             "[TCPService][submitToThreadPool] Worker task counters updated"
@@ -1549,7 +2022,8 @@ public class TCPService implements Service, HealthCheckable {
                 }
             });
 
-            long submittedCount = submittedTasks.incrementAndGet();
+            long submittedCount =
+                    submittedTasks.incrementAndGet();
 
             log.debug(() ->
                     "[TCPService][submitToThreadPool] Task submitted successfully"
@@ -1559,9 +2033,11 @@ public class TCPService implements Service, HealthCheckable {
 
         } catch (RejectedExecutionException exception) {
 
-            long outstandingCount = outstandingTasks.decrementAndGet();
+            long outstandingCount =
+                    outstandingTasks.decrementAndGet();
 
-            long rejectionCount = rejectedTasks.incrementAndGet();
+            long rejectionCount =
+                    rejectedTasks.incrementAndGet();
 
             log.warn(() ->
                     "[TCPService][submitToThreadPool] Task rejected by TCP worker executor"
@@ -1583,7 +2059,9 @@ public class TCPService implements Service, HealthCheckable {
 
         if (resource == null) {
 
-            log.debug("[TCPService][closeQuietly] Skipping close because resource is null");
+            log.debug(
+                    "[TCPService][closeQuietly] Skipping close because resource is null"
+            );
 
             return;
         }
@@ -1592,14 +2070,16 @@ public class TCPService implements Service, HealthCheckable {
 
             log.debug(() ->
                     "[TCPService][closeQuietly] Closing resource"
-                            + " | resourceType=" + resource.getClass().getSimpleName()
+                            + " | resourceType="
+                            + resource.getClass().getSimpleName()
             );
 
             resource.close();
 
             log.debug(() ->
                     "[TCPService][closeQuietly] Resource closed successfully"
-                            + " | resourceType=" + resource.getClass().getSimpleName()
+                            + " | resourceType="
+                            + resource.getClass().getSimpleName()
             );
 
         } catch (Exception exception) {
@@ -1616,44 +2096,68 @@ public class TCPService implements Service, HealthCheckable {
      * All background jobs below
      * */
 
+    // =========================================================
+    // Peer Reconciliation
+    // =========================================================
+
     private void triggerReconcilePeer() {
 
-        log.debug("[TCPService][triggerReconcilePeer] Peer reconciliation job triggered");
+        log.debug(
+                "[TCPService][triggerReconcilePeer] Peer reconciliation job triggered"
+        );
 
         submitToThreadPool(
                 this::reconcilePeers
         );
 
-        log.debug("[TCPService][triggerReconcilePeer] Peer reconciliation task submitted");
+        log.debug(
+                "[TCPService][triggerReconcilePeer] Peer reconciliation task submitted"
+        );
     }
 
     private void reconcilePeers() {
 
-        log.debug("[TCPService][reconcilePeers] Starting peer reconciliation");
+        log.debug(
+                "[TCPService][reconcilePeers] Starting peer reconciliation"
+        );
 
         tcpProcessor.reconcilePeers();
 
-        log.debug("[TCPService][reconcilePeers] Peer reconciliation completed");
+        log.debug(
+                "[TCPService][reconcilePeers] Peer reconciliation completed"
+        );
     }
+
+    // =========================================================
+    // Correlation Cleanup
+    // =========================================================
 
     private void triggerCleanup() {
 
-        log.debug("[TCPService][triggerCleanup] TCP cleanup job triggered");
+        log.debug(
+                "[TCPService][triggerCleanup] TCP cleanup job triggered"
+        );
 
         submitToThreadPool(
                 this::cleanup
         );
 
-        log.debug("[TCPService][triggerCleanup] TCP cleanup task submitted");
+        log.debug(
+                "[TCPService][triggerCleanup] TCP cleanup task submitted"
+        );
     }
 
     @Override
     public void cleanup() {
 
-        log.debug("[TCPService][cleanup] Starting correlation cleanup");
+        log.debug(
+                "[TCPService][cleanup] Starting correlation cleanup"
+        );
 
         tcpProcessor.cleanupCorrelations();
 
-        log.debug("[TCPService][cleanup] Correlation cleanup completed");
+        log.debug(
+                "[TCPService][cleanup] Correlation cleanup completed"
+        );
     }
 }

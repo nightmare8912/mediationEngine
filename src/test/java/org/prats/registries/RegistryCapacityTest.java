@@ -15,8 +15,8 @@ class RegistryCapacityTest {
         registry.add(UUID.randomUUID(),reply);assertEquals(2,registry.removeExpired(0).size());
         registry.add(UUID.randomUUID(),reply);registry.add(UUID.randomUUID(),reply);assertEquals(2,registry.getSize());
     }
-    @Test void controlExpirationAlsoReleasesPermits() {
-        TCPControlRegistry registry=new TCPControlRegistry(1);registry.add(UUID.randomUUID(),reply);
+    @Test void tcpCorrelationExpirationAlsoReleasesPermits() {
+        TCPCorrelationRegistry registry=new TCPCorrelationRegistry(1);registry.add(UUID.randomUUID(),reply);
         assertThrows(RejectedExecutionException.class,()->registry.add(UUID.randomUUID(),reply));
         assertEquals(1,registry.removeExpired(0).size());registry.add(UUID.randomUUID(),reply);
         assertEquals(1,registry.getSize());
@@ -37,9 +37,9 @@ class RegistryCapacityTest {
         try {
             RetryRegistry registry=new RetryRegistry(5,300);
             var parser=new org.prats.parsers.MessageParser(org.prats.definitions.enums.ProcessType.PLATFORM);
-            var first=new org.prats.definitions.classes.PendingDelivery(UUID.randomUUID(),parser.createResponse(UUID.randomUUID(),Map.of("body","one")),reply);
-            var second=new org.prats.definitions.classes.PendingDelivery(UUID.randomUUID(),parser.createResponse(UUID.randomUUID(),Map.of("body","two")),reply);
-            var third=new org.prats.definitions.classes.PendingDelivery(UUID.randomUUID(),parser.createResponse(UUID.randomUUID(),Map.of("body","three")),reply);
+            var first=new org.prats.definitions.classes.PendingDelivery(UUID.randomUUID(),parser.createResponse(UUID.randomUUID(),new org.prats.definitions.records.CommandResponse("one")),reply);
+            var second=new org.prats.definitions.classes.PendingDelivery(UUID.randomUUID(),parser.createResponse(UUID.randomUUID(),new org.prats.definitions.records.CommandResponse("two")),reply);
+            var third=new org.prats.definitions.classes.PendingDelivery(UUID.randomUUID(),parser.createResponse(UUID.randomUUID(),new org.prats.definitions.records.CommandResponse("three")),reply);
             assertTrue(registry.add(first));assertTrue(registry.add(second));assertFalse(registry.add(third));
             assertTrue(registry.pendingBytes()<=2500);registry.remove(first.getCorrelationId(),first);assertTrue(registry.add(third));
             registry.remove(second.getCorrelationId(),second);registry.remove(third.getCorrelationId(),third);assertEquals(0,registry.pendingBytes());

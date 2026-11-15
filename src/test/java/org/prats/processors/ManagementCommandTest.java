@@ -45,6 +45,14 @@ class ManagementCommandTest {
     }
 
     @Test
+    void removedAccountCommandsAreRejected() throws Exception {
+        for (String command : Set.of("mng register operator password", "mng login operator password",
+                "mng whoami", "mng logout")) {
+            assertNull(parse(command), command);
+        }
+    }
+
+    @Test
     void targetIdentityRetainsCase() throws Exception {
         assertEquals("mng health report Ec-A", parser.extractPayloadField(
                 parse("mNg HeAlTh RePoRt Ec-A"), "body", String.class));

@@ -5,7 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.enums.MessageType;
 import org.prats.definitions.enums.Operation;
-import org.prats.definitions.interfaces.ControlChannelCommunicator;
+import org.prats.definitions.interfaces.ExternalChanelCommunicator;
 import org.prats.definitions.interfaces.MessageDispatcher;
 import org.prats.definitions.records.ConsolidatedWatchdogConfig;
 import org.prats.loggers.EngineLogger;
@@ -22,7 +22,7 @@ public class PlatformControlHandler {
     private static final EngineLogger log =
             EngineLogger.getLogger(PlatformControlHandler.class);
 
-    private ControlChannelCommunicator controlChannelCommunicator;
+    private ExternalChanelCommunicator externalChanelCommunicator;
     private MessageDispatcher messageDispatcher;
     private final CommandParser commandParser;
     private final Map<String, ConsolidatedWatchdogConfig> ecWatchdogMap;
@@ -40,15 +40,15 @@ public class PlatformControlHandler {
         );
     }
 
-    public void setControlChannelCommunicator(ControlChannelCommunicator controlChannelCommunicator) {
-        this.controlChannelCommunicator = controlChannelCommunicator;
+    public void setControlChannelCommunicator(ExternalChanelCommunicator externalChanelCommunicator) {
+        this.externalChanelCommunicator = externalChanelCommunicator;
 
         log.debug(() ->
                 "[PlatformControlHandler][setControlChannelCommunicator] Control channel communicator configured"
                         + " | communicatorType="
-                        + (controlChannelCommunicator == null
+                        + (externalChanelCommunicator == null
                         ? "null"
-                        : controlChannelCommunicator.getClass().getSimpleName())
+                        : externalChanelCommunicator.getClass().getSimpleName())
         );
     }
 
@@ -170,7 +170,7 @@ public class PlatformControlHandler {
                             + " | correlationId=" + command.getCorrelationId()
             );
 
-            controlChannelCommunicator.sendRequest(
+            externalChanelCommunicator.sendRequest(
                     controlRequest,
                     watchdogReplyChannel
             ).whenComplete((ignored, sendError) -> {
@@ -238,7 +238,6 @@ public class PlatformControlHandler {
 
         Message controlRequest = createControlMessage(
                 watchdogRequest,
-                "ecName",
                 ecName
         );
 
@@ -300,11 +299,7 @@ public class PlatformControlHandler {
 
         try {
 
-            String status = commandParser.extractPayloadField(
-                    progress,
-                    "status",
-                    String.class
-            );
+            String status = commandParser.fromPayload(progress.getPayload(), org.prats.definitions.records.ControlResponse.class).status();
 
             log.debug(() ->
                     "[PlatformControlHandler][dispatchWatchdogProgress] WATCHDOG progress status extracted"
@@ -335,8 +330,8 @@ public class PlatformControlHandler {
                     e
             );
 
-            Message errorResponse = commandParser.createCommandResponse(
-                    command,
+            Message errorResponse = commandParser.createErrorResponse(
+                    command.getCorrelationId(), "WATCHDOG_PROGRESS_INVALID",
                     "Unable to parse WATCHDOG progress update."
             );
 
@@ -348,10 +343,9 @@ public class PlatformControlHandler {
     }
 
     String watchdogResponseText(Message response) throws JsonProcessingException {
-        // Failed lifecycle operations carry errorDescription rather than status.
-        String field = "FAILED".equals(response.getStatus())
-                ? "errorDescription" : "status";
-        return commandParser.extractPayloadField(response, field, String.class);
+        if (response.hasError()) return response.getError().getErrorMessage();
+        return commandParser.fromPayload(response.getPayload(),
+                org.prats.definitions.records.ControlResponse.class).status();
     }
 
     private void completeWatchdogOperation(
@@ -392,8 +386,8 @@ public class PlatformControlHandler {
                         cause == null ? error : cause
                 );
 
-                finalResponse = commandParser.createCommandResponse(
-                        command,
+                finalResponse = commandParser.createErrorResponse(
+                        command.getCorrelationId(), "WATCHDOG_FAILED",
                         "Failed to " + action + " EC: " + errorMessage
                 );
 
@@ -425,10 +419,9 @@ public class PlatformControlHandler {
                                     + " | status=" + status
                     );
 
-                    finalResponse = commandParser.createCommandResponse(
-                            command,
-                            status
-                    );
+                    finalResponse = response.hasError()
+                            ? commandParser.createErrorResponse(command.getCorrelationId(), response.getError().getErrorCode(), status)
+                            : commandParser.createCommandResponse(command, status);
 
                 } catch (JsonProcessingException | RuntimeException e) {
 
@@ -437,8 +430,8 @@ public class PlatformControlHandler {
                             e
                     );
 
-                    finalResponse = commandParser.createCommandResponse(
-                            command,
+                    finalResponse = commandParser.createErrorResponse(
+                            command.getCorrelationId(), "WATCHDOG_RESPONSE_INVALID",
                             "WATCHDOG final response could not be processed."
                     );
                 }
@@ -521,21 +514,16 @@ public class PlatformControlHandler {
 
     private Message createControlMessage(
             Message controlMessage,
-            String key,
             String value
     ) {
 
         log.debug(() ->
                 "[PlatformControlHandler][createControlMessage] Adding control payload field"
-                        + " | key=" + key
                         + " | value=" + value
         );
 
-        return commandParser.putPayloadField(
-                controlMessage,
-                key,
-                value
-        );
+        controlMessage.setPayload(commandParser.toPayload(new org.prats.definitions.records.ControlRequest(value)));
+        return controlMessage;
     }
 
     private void trace(String stage, Message message) {

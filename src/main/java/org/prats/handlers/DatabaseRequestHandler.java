@@ -329,14 +329,8 @@ public class DatabaseRequestHandler implements RequestHandler {
 
             return response(
                     request,
-                    Map.of(
-                            "ok", true,
-                            "columns", columns,
-                            "rows", result,
-                            "rowCount", result.size(),
-                            "truncated", truncated,
-                            "body", "Query completed."
-                    )
+                    new org.prats.definitions.records.QueryResponse(true, columns, result,
+                            result.size(), truncated, "Query completed.")
             );
 
         } catch (Exception exception) {
@@ -367,11 +361,8 @@ public class DatabaseRequestHandler implements RequestHandler {
 
         return response(
                 request,
-                Map.of(
-                        "ok", true,
-                        "affectedRows", count,
-                        "body", "Update completed. Rows affected: " + count
-                )
+                new org.prats.definitions.records.UpdateResponse(true, count,
+                        "Update completed. Rows affected: " + count)
         );
     }
 
@@ -382,25 +373,12 @@ public class DatabaseRequestHandler implements RequestHandler {
 
     private Message response(
             Message request,
-            Map<String, ?> values
+            Object values
     ) {
 
-        Message response = parser.createResponse(
-                request.getCorrelationId(),
-                Map.of()
-        );
-
-        response.setPayload(
-                parser.convertToJsonNode(values)
-        );
-
+        Message response = parser.createResponse(request.getCorrelationId(), values);
         response.setResponseComplete(true);
-
-        response.setStatus(
-                Boolean.TRUE.equals(values.get("ok"))
-                        ? "SUCCESS"
-                        : "FAILED"
-        );
+        response.setStatus("SUCCESS");
 
         return response;
     }
@@ -422,15 +400,7 @@ public class DatabaseRequestHandler implements RequestHandler {
                         + " | correlationId=" + request.getCorrelationId()
         );
 
-        return response(
-                request,
-                Map.of(
-                        "ok", false,
-                        "errorCode", code,
-                        "errorDescription", reason,
-                        "body", reason
-                )
-        );
+        return parser.createErrorResponse(request.getCorrelationId(), code, reason);
     }
 
 

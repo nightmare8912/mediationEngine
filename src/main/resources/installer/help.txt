@@ -20,14 +20,6 @@ PLATFORM COMMANDS (run on the platform TCP connection, port 15000)
 
     mng help
         Show runtime commands supported by the connected JVM.
-    mng register <username> <password>
-        Create an account (password: 10-128 characters).
-    mng login <username> <password>
-        Authenticate this connection before management commands.
-    mng whoami
-        Show the authenticated user.
-    mng logout
-        End the session.
     mng health report platform
         Show the platform's internal service health.
     mng health report ec01

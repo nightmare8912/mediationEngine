@@ -112,12 +112,9 @@ public class RequestProcessor {
                                 + " | reason=" + exception.getMessage()
                 );
 
-                Message overload = messageParser.createResponse(
+                Message overload = messageParser.createErrorResponse(
                         requestMessage.getCorrelationId(),
-                        Map.of(
-                                "errorCode", "OVERLOADED",
-                                "body", "Too many in-flight requests. Retry after load drops."
-                        )
+                        "OVERLOADED", "Too many in-flight requests. Retry after load drops."
                 );
 
                 overload.setOperation(
@@ -227,12 +224,8 @@ public class RequestProcessor {
                     ? "Service overloaded. Retry after load drops."
                     : "Request could not be processed.";
 
-            Message error = messageParser.createResponse(
-                    requestMessage.getCorrelationId(),
-                    Map.of(
-                            "errorCode", errorCode,
-                            "body", errorBody
-                    )
+            Message error = messageParser.createErrorResponse(
+                    requestMessage.getCorrelationId(), errorCode, errorBody
             );
 
             error.setOperation(

@@ -24,10 +24,10 @@ class DatabaseRequestHandlerTest {
         Message delete=handler.handleRequest(request(Operation.DELETE,"{\"entity\":\"items\",\"filters\":{\"id\":{\"operator\":\"EQ\",\"value\":1}}}"));assertEquals(1,delete.getPayload().path("affectedRows").asInt());
     }
     @Test void errorsAreTerminalAndDoNotExposeSqlOrCredentials() throws Exception {
-        Message bad=handler.handleRequest(request(Operation.FETCH,"{\"entity\":\"missing\"}"));assertEquals("FAILED",bad.getStatus());assertTrue(bad.isResponseComplete());assertTrue(bad.getPayload().has("errorCode"));
-        assertEquals("INVALID_REQUEST",handler.handleRequest(request(Operation.DELETE,"{\"entity\":\"items\"}")).getPayload().path("errorCode").asText());
-        assertEquals("PROTECTED_ENTITY",handler.handleRequest(request(Operation.FETCH,"{\"entity\":\"users\"}")).getPayload().path("errorCode").asText());
-        assertEquals("INVALID_REQUEST",handler.handleRequest(request(Operation.FETCH,"{\"entity\":\"items; DROP TABLE items\"}")).getPayload().path("errorCode").asText());
+        Message bad=handler.handleRequest(request(Operation.FETCH,"{\"entity\":\"missing\"}"));assertEquals("FAILED",bad.getStatus());assertTrue(bad.isResponseComplete());assertTrue(bad.hasError());
+        assertEquals("INVALID_REQUEST",handler.handleRequest(request(Operation.DELETE,"{\"entity\":\"items\"}")).getError().getErrorCode());
+        assertEquals("PROTECTED_ENTITY",handler.handleRequest(request(Operation.FETCH,"{\"entity\":\"users\"}")).getError().getErrorCode());
+        assertEquals("INVALID_REQUEST",handler.handleRequest(request(Operation.FETCH,"{\"entity\":\"items; DROP TABLE items\"}")).getError().getErrorCode());
     }
     @Test void queryResultsAreBounded() throws Exception {
         try(var c=database.getDataSource().getConnection();var s=c.createStatement()){s.execute("INSERT INTO items SELECT X, 'row' FROM SYSTEM_RANGE(1,1100)");}
@@ -42,6 +42,6 @@ class DatabaseRequestHandlerTest {
         Message decoded = parser.createMessageFromJSON(serialized.substring(0, serialized.length() - 1)
                 + ",\"accountDatabaseRequest\":true}");
         assertFalse(decoded.isAccountDatabaseRequest());
-        assertEquals("PROTECTED_ENTITY", handler.handleRequest(decoded).getPayload().path("errorCode").asText());
+        assertEquals("PROTECTED_ENTITY", handler.handleRequest(decoded).getError().getErrorCode());
     }
 }

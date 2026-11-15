@@ -1,57 +1,72 @@
+
 package org.prats.services.watchdogService;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+
 import org.prats.container.launchers.ContainerLauncher;
 import org.prats.definitions.classes.Message;
-import org.prats.definitions.enums.ContainerType;
-import org.prats.definitions.interfaces.ControlMessageHandler;
+import org.prats.definitions.interfaces.ExternalChanelCommunicator;
 import org.prats.definitions.interfaces.Service;
+
+import org.prats.definitions.interfaces.TCPMessageHandler;
 import org.prats.loggers.EngineLogger;
 import org.prats.parsers.MessageParser;
-import org.prats.definitions.interfaces.ControlChannelCommunicator;
 import org.prats.threading.ThreadPool;
-import org.prats.utilities.ApplicationPaths;
 
 import java.io.IOException;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.RejectedExecutionException;
+
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
-// the watchdog service is a lightweight jvm that has only one service (tcp service) keeping it alive
-// this jvm owns the actual container running on its server, it's like the platform proxy to control the
-// container on a different machine, since the platform cannot kill and re-launch a process on a remote machine.
-// the platform can send a kill command to the watchdog if it believes that the ec is unresponsive
-// it can also order a kill command if the ec itself escalates to the platform about its unhealthy state.
-
-
-/*
- * Operation: START
- * payload: {
- *   "ecName": "ec01"
- * }
- * */
-public class WatchdogService implements Service, ControlMessageHandler {
+/**
+ * WATCHDOG service responsible for managing execution container
+ * processes on the local machine.
+ *
+ * The WATCHDOG acts as the PLATFORM's local process supervisor.
+ * It receives control requests from the PLATFORM and performs
+ * process lifecycle operations.
+ *
+ * Supported operations:
+ * - START
+ * - STOP
+ * - RESTART
+ *
+ * Each execution container is tracked using its Process object.
+ *
+ * The WATCHDOG does not automatically discover processes that
+ * were launched by a previous WATCHDOG JVM instance.
+ *
+ * Shutting down the WATCHDOG does not terminate its managed ECs.
+ */
+public class WatchdogService
+        implements Service, TCPMessageHandler {
 
     private static final EngineLogger log =
             EngineLogger.getLogger(WatchdogService.class);
 
     private final MessageParser messageParser;
-    private final Map<String, String> ecConfigPaths;;
+
+    private final Map<String, String> ecConfigPaths;
+
+    private final Map<String, Process> processes;
+
     private ExecutorService watchdogWorkers;
+
     private Service service;
 
-    private ControlChannelCommunicator controlChannelCommunicator;
+    private ExternalChanelCommunicator externalChanelCommunicator;
 
-    private final Map<String, ProcessHandle> processes;
-    private org.prats.handlers.JVMDiagnosticsHandler diagnostics;
-    public void setDiagnostics(org.prats.handlers.JVMDiagnosticsHandler diagnostics) { this.diagnostics = diagnostics; }
+
+    // =========================================================
+    // 1. CONSTRUCTOR
+    // =========================================================
 
     public WatchdogService(
             MessageParser messageParser,
@@ -65,117 +80,146 @@ public class WatchdogService implements Service, ControlMessageHandler {
 
         this.ecConfigPaths = Objects.requireNonNull(
                 ecConfigPaths,
-                "JVM launcher cannot be null"
+                "EC configuration paths cannot be null"
         );
 
         this.processes = new ConcurrentHashMap<>();
 
         log.info(() ->
-                "[WatchdogService][constructor] WATCHDOG service initialized"
-                        + " | registeredECConfigs=" + this.ecConfigPaths.size()
-                        + " | trackedProcesses=" + this.processes.size()
+                "[WatchdogService][constructor] WATCHDOG initialized"
+                        + " | configuredECs=" + ecConfigPaths.size()
+                        + " | trackedProcesses=" + processes.size()
         );
     }
 
+
+    // =========================================================
+    // 2. DEPENDENCY INJECTION
+    // =========================================================
+
     public void setService(Service service) {
+
         this.service = service;
 
         log.debug(() ->
                 "[WatchdogService][setService] Transport service configured"
                         + " | serviceType="
-                        + (service == null ? "null" : service.getClass().getSimpleName())
+                        + (service == null
+                        ? "null"
+                        : service.getClass().getSimpleName())
         );
     }
 
+
+    public void setControlChannelCommunicator(
+            ExternalChanelCommunicator externalChanelCommunicator
+    ) {
+
+        this.externalChanelCommunicator = Objects.requireNonNull(
+                externalChanelCommunicator,
+                "ControlChannelCommunicator cannot be null"
+        );
+
+        log.debug(() ->
+                "[WatchdogService][setControlChannelCommunicator] "
+                        + "Control communicator configured"
+                        + " | communicatorType="
+                        + externalChanelCommunicator
+                        .getClass()
+                        .getSimpleName()
+        );
+    }
+
+
+    // =========================================================
+    // 3. EXTRACT EC NAME FROM REQUEST
+    // =========================================================
+
     public String getProcessFromRequest(Message request) {
+
         String processName;
+
         try {
 
-            processName = messageParser.extractPayloadField(
-                    request,
-                    "ecName",
-                    String.class
-            );
+            processName = messageParser.fromPayload(request.getPayload(), org.prats.definitions.records.ControlRequest.class).ecName();
 
             if (processName != null && processName.isBlank()) {
                 processName = null;
             }
 
-        } catch (JsonProcessingException jsonProcessingException) {
+        } catch (JsonProcessingException exception) {
+
             log.warn(() ->
-                    "[WatchdogService][getProcessFromRequest] Unable to extract EC name"
-                            + " | reason=" + jsonProcessingException.getMessage()
+                    "[WatchdogService][getProcessFromRequest] "
+                            + "Unable to extract EC name"
+                            + " | reason=" + exception.getMessage()
             );
+
             processName = null;
         }
 
-        final String extractedProcessName = processName;
+        final String extractedName = processName;
+
         log.debug(() ->
-                "[WatchdogService][getProcessFromRequest] EC name extracted"
-                        + " | ecName=" + extractedProcessName
+                "[WatchdogService][getProcessFromRequest] "
+                        + "EC name extraction completed"
+                        + " | ecName=" + extractedName
         );
 
         return processName;
     }
 
-    public void setControlChannelCommunicator(
-            ControlChannelCommunicator controlChannelCommunicator
-    ) {
 
-        Objects.requireNonNull(
-                controlChannelCommunicator,
-                "ControlChannelCommunicator cannot be null."
-        );
+    // =========================================================
+    // 4. PROCESS REGISTRY
+    // =========================================================
 
-        this.controlChannelCommunicator = controlChannelCommunicator;
+    /**
+     * Retrieves a process launched and registered by this
+     * WATCHDOG instance.
+     *
+     * No operating-system process discovery is performed.
+     */
+    private Process getProcess(String processName) {
 
-        log.debug(() ->
-                "[WatchdogService][setControlChannelCommunicator] Control channel communicator configured"
-                        + " | communicatorType="
-                        + controlChannelCommunicator.getClass().getSimpleName()
-        );
-    }
-
-    private ProcessHandle getProcess(String processName) {
-        ProcessHandle tracked = processes.get(processName);
-        if (tracked != null && !tracked.isAlive()) {
-            processes.remove(processName, tracked);
-            tracked = null;
-        }
-        if (tracked == null && ecConfigPaths.containsKey(processName)) {
-            tracked = ECProcessDiscovery.find(processName, ApplicationPaths.getHome()).orElse(null);
-            if (tracked != null) {
-                processes.put(processName, tracked);
-                log.info("[WatchdogService][getProcess] Reattached to surviving EC"
-                        + " | ecName=" + processName + " | pid=" + tracked.pid());
-            }
-        }
-        final ProcessHandle process = tracked;
+        Process process = processes.get(processName);
 
         log.debug(() ->
                 "[WatchdogService][getProcess] Process lookup completed"
                         + " | ecName=" + processName
-                        + " | processFound=" + (process != null)
-                        + " | processAlive=" + (process != null && process.isAlive())
+                        + " | found=" + (process != null)
+                        + " | alive="
+                        + (process != null && process.isAlive())
         );
 
         return process;
     }
 
-    private synchronized Message handleStart(Message request) {
 
-        log.info(() ->
-                "[WatchdogService][handleStart] Start request received"
-                        + " | correlationId=" + request.getCorrelationId()
-        );
+    // =========================================================
+    // 5. START EXECUTION CONTAINER
+    // =========================================================
+
+    private synchronized Message handleStart(Message request) {
 
         String ecName = getProcessFromRequest(request);
 
+        log.info(() ->
+                "[WatchdogService][handleStart] EC start requested"
+                        + " | ecName=" + ecName
+                        + " | correlationId=" + request.getCorrelationId()
+        );
+
+
+        // -----------------------------------------------------
+        // 5.1. Validate process name
+        // -----------------------------------------------------
+
         if (ecName == null) {
 
-            log.warn(() ->
-                    "[WatchdogService][handleStart] Start request rejected because EC name is invalid"
-                            + " | correlationId=" + request.getCorrelationId()
+            log.warn(
+                    "[WatchdogService][handleStart] "
+                            + "Start rejected because EC name is invalid"
             );
 
             return createErrorResponse(
@@ -185,12 +229,18 @@ public class WatchdogService implements Service, ControlMessageHandler {
             );
         }
 
-        ProcessHandle processCheck = getProcess(ecName);
+
+        // -----------------------------------------------------
+        // 5.2. Check existing process
+        // -----------------------------------------------------
+
+        Process processCheck = getProcess(ecName);
 
         if (processCheck != null && processCheck.isAlive()) {
 
             log.warn(() ->
-                    "[WatchdogService][handleStart] Start request rejected because EC is already running"
+                    "[WatchdogService][handleStart] "
+                            + "EC is already running"
                             + " | ecName=" + ecName
                             + " | pid=" + processCheck.pid()
             );
@@ -202,21 +252,35 @@ public class WatchdogService implements Service, ControlMessageHandler {
             );
         }
 
+
+        // -----------------------------------------------------
+        // 5.3. Remove stale process registration
+        // -----------------------------------------------------
+
         if (processCheck != null) {
+
             processes.remove(ecName, processCheck);
+
             log.debug(() ->
-                    "[WatchdogService][handleStart] Removed stale process registration"
+                    "[WatchdogService][handleStart] "
+                            + "Removed stale EC process registration"
                             + " | ecName=" + ecName
                             + " | pid=" + processCheck.pid()
             );
         }
+
+
+        // -----------------------------------------------------
+        // 5.4. Resolve EC configuration
+        // -----------------------------------------------------
 
         String ecConfigPath = ecConfigPaths.get(ecName);
 
         if (ecConfigPath == null || ecConfigPath.isBlank()) {
 
             log.warn(() ->
-                    "[WatchdogService][handleStart] Start request rejected because no EC configuration path is registered"
+                    "[WatchdogService][handleStart] "
+                            + "No EC configuration registered"
                             + " | ecName=" + ecName
             );
 
@@ -227,12 +291,19 @@ public class WatchdogService implements Service, ControlMessageHandler {
             );
         }
 
-        try {
+        log.debug(() ->
+                "[WatchdogService][handleStart] "
+                        + "EC configuration resolved"
+                        + " | ecName=" + ecName
+                        + " | configPath=" + ecConfigPath
+        );
 
-            log.info(() ->
-                    "[WatchdogService][handleStart] Launching EC process"
-                            + " | ecName=" + ecName
-            );
+
+        // -----------------------------------------------------
+        // 5.5. Launch EC JVM
+        // -----------------------------------------------------
+
+        try {
 
             sendProgressResponse(
                     request,
@@ -240,15 +311,26 @@ public class WatchdogService implements Service, ControlMessageHandler {
                             + ". Launching process."
             );
 
+            log.info(() ->
+                    "[WatchdogService][handleStart] Launching EC JVM"
+                            + " | ecName=" + ecName
+            );
+
             Process process = new ContainerLauncher().launchEC(
                     ecConfigPath,
                     List.of()
             );
 
+
+            // -------------------------------------------------
+            // 5.6. Validate launcher result
+            // -------------------------------------------------
+
             if (process == null) {
 
                 log.error(
-                        "[WatchdogService][handleStart] Container launcher returned a null process"
+                        "[WatchdogService][handleStart] "
+                                + "ContainerLauncher returned null"
                                 + " | ecName=" + ecName
                 );
 
@@ -262,7 +344,8 @@ public class WatchdogService implements Service, ControlMessageHandler {
             final Process launchedProcess = process;
 
             log.info(() ->
-                    "[WatchdogService][handleStart] EC process created"
+                    "[WatchdogService][handleStart] "
+                            + "EC JVM process created"
                             + " | ecName=" + ecName
                             + " | pid=" + launchedProcess.pid()
             );
@@ -270,66 +353,63 @@ public class WatchdogService implements Service, ControlMessageHandler {
             sendProgressResponse(
                     request,
                     "EC " + ecName
-                            + " process created. PID: " + launchedProcess.pid()
+                            + " process created. PID: " + process.pid()
                             + ". Verifying that the process is running."
             );
 
-            if (!launchedProcess.isAlive()) {
 
-                int exitCode = launchedProcess.exitValue();
+            // -------------------------------------------------
+            // 5.7. Verify process liveness
+            // -------------------------------------------------
+
+            if (!process.isAlive()) {
+
+                int exitCode = process.exitValue();
 
                 log.error(
-                        "[WatchdogService][handleStart] EC process exited immediately"
+                        "[WatchdogService][handleStart] "
+                                + "EC process exited immediately"
                                 + " | ecName=" + ecName
-                                + " | pid=" + launchedProcess.pid()
+                                + " | pid=" + process.pid()
                                 + " | exitCode=" + exitCode
                 );
-
-                process = null;
 
                 return createErrorResponse(
                         request,
                         "UNABLE_TO_START",
-                        "The container process exited immediately. Exit code: "
-                                + exitCode
+                        "The container process exited immediately. "
+                                + "Exit code: " + exitCode
                 );
             }
 
-            log.info(() ->
-                    "[WatchdogService][handleStart] EC process is running and will be registered with WATCHDOG"
-                            + " | ecName=" + ecName
-                            + " | pid=" + launchedProcess.pid()
-                            + " | containerType=" + ContainerType.WATCHDOG
-            );
+
+            // -------------------------------------------------
+            // 5.8. Register process
+            // -------------------------------------------------
 
             sendProgressResponse(
                     request,
                     "EC " + ecName
-                            + " process is running. Registering process with WATCHDOG."
+                            + " process is running. "
+                            + "Registering process with WATCHDOG."
             );
 
-            Map<String, String> response = new HashMap<>();
+            processes.put(ecName, process);
 
-            response.put(
-                    "body",
-                    "Process started. PID: " + launchedProcess.pid()
-            );
-            response.put(
-                    "status",
-                    "Process started. PID: " + launchedProcess.pid()
-            );
-
-            processes.put(
-                    ecName,
-                    launchedProcess.toHandle()
-            );
-
-            log.debug(() ->
-                    "[WatchdogService][handleStart] EC process registered"
+            log.info(() ->
+                    "[WatchdogService][handleStart] "
+                            + "EC process registered successfully"
                             + " | ecName=" + ecName
                             + " | pid=" + launchedProcess.pid()
                             + " | trackedProcesses=" + processes.size()
             );
+
+
+            // -------------------------------------------------
+            // 5.9. Build successful response
+            // -------------------------------------------------
+
+            var response = new org.prats.definitions.records.ControlResponse("Process started. PID: " + process.pid(), "Process started. PID: " + process.pid());
 
             return createResponseMessage(
                     request,
@@ -339,7 +419,8 @@ public class WatchdogService implements Service, ControlMessageHandler {
         } catch (IOException | SecurityException exception) {
 
             log.error(
-                    "[WatchdogService][handleStart] Unable to start EC process"
+                    "[WatchdogService][handleStart] "
+                            + "Unable to start execution container"
                             + " | ecName=" + ecName,
                     exception
             );
@@ -353,20 +434,31 @@ public class WatchdogService implements Service, ControlMessageHandler {
         }
     }
 
-    private synchronized Message handleStop(Message request) {
 
-        log.info(() ->
-                "[WatchdogService][handleStop] Stop request received"
-                        + " | correlationId=" + request.getCorrelationId()
-        );
+    // =========================================================
+    // 6. STOP EXECUTION CONTAINER
+    // =========================================================
+
+    private synchronized Message handleStop(Message request) {
 
         String ecName = getProcessFromRequest(request);
 
+        log.info(() ->
+                "[WatchdogService][handleStop] EC stop requested"
+                        + " | ecName=" + ecName
+                        + " | correlationId=" + request.getCorrelationId()
+        );
+
+
+        // -----------------------------------------------------
+        // 6.1. Validate EC name
+        // -----------------------------------------------------
+
         if (ecName == null) {
 
-            log.warn(() ->
-                    "[WatchdogService][handleStop] Stop request rejected because EC name is invalid"
-                            + " | correlationId=" + request.getCorrelationId()
+            log.warn(
+                    "[WatchdogService][handleStop] "
+                            + "Stop rejected because EC name is invalid"
             );
 
             return createErrorResponse(
@@ -376,7 +468,12 @@ public class WatchdogService implements Service, ControlMessageHandler {
             );
         }
 
-        ProcessHandle processCheck = getProcess(ecName);
+
+        // -----------------------------------------------------
+        // 6.2. Retrieve existing process
+        // -----------------------------------------------------
+
+        Process processCheck = getProcess(ecName);
 
         if (processCheck == null || !processCheck.isAlive()) {
 
@@ -385,22 +482,12 @@ public class WatchdogService implements Service, ControlMessageHandler {
             }
 
             log.info(() ->
-                    "[WatchdogService][handleStop] EC process is already stopped"
+                    "[WatchdogService][handleStop] "
+                            + "EC is already stopped or not registered"
                             + " | ecName=" + ecName
-                            + " | staleRegistrationRemoved=" + (processCheck != null)
             );
 
-            Map<String, String> response = new HashMap<>();
-
-            response.put(
-                    "body",
-                    "Process is already stopped."
-            );
-
-            response.put(
-                    "status",
-                    "Process is already stopped."
-            );
+            var response = new org.prats.definitions.records.ControlResponse("Process is already stopped.", "Process is already stopped.");
 
             return createResponseMessage(
                     request,
@@ -408,17 +495,28 @@ public class WatchdogService implements Service, ControlMessageHandler {
             );
         }
 
-        ProcessHandle processToStop = processCheck;
+
+        // -----------------------------------------------------
+        // 6.3. Prepare process termination
+        // -----------------------------------------------------
+
+        Process processToStop = processCheck;
 
         long processId = processToStop.pid();
 
         log.info(() ->
-                "[WatchdogService][handleStop] Initiating graceful EC termination"
+                "[WatchdogService][handleStop] "
+                        + "Beginning EC process termination"
                         + " | ecName=" + ecName
                         + " | pid=" + processId
         );
 
         try {
+
+
+            // -------------------------------------------------
+            // 6.4. Request graceful process termination
+            // -------------------------------------------------
 
             sendProgressResponse(
                     request,
@@ -428,25 +526,49 @@ public class WatchdogService implements Service, ControlMessageHandler {
 
             processToStop.destroy();
 
+            log.debug(() ->
+                    "[WatchdogService][handleStop] "
+                            + "Graceful termination signal sent"
+                            + " | ecName=" + ecName
+                            + " | pid=" + processId
+            );
+
             sendProgressResponse(
                     request,
-                    "Graceful termination signal sent. Waiting up to 15 seconds for EC "
+                    "Graceful termination signal sent. "
+                            + "Waiting up to 15 seconds for EC "
                             + ecName + " to terminate."
             );
 
-            boolean terminated = awaitTermination(processToStop, 15);
+
+            // -------------------------------------------------
+            // 6.5. Wait for graceful termination
+            // -------------------------------------------------
+
+            boolean terminated = processToStop.waitFor(
+                    15,
+                    TimeUnit.SECONDS
+            );
+
+
+            // -------------------------------------------------
+            // 6.6. Force termination if necessary
+            // -------------------------------------------------
 
             if (!terminated) {
 
                 log.warn(() ->
-                        "[WatchdogService][handleStop] Graceful termination timed out; forcing termination"
+                        "[WatchdogService][handleStop] "
+                                + "Graceful termination timed out"
                                 + " | ecName=" + ecName
                                 + " | pid=" + processId
+                                + " | action=FORCE_TERMINATE"
                 );
 
                 sendProgressResponse(
                         request,
-                        "Graceful termination timed out. Sending forced termination signal to EC "
+                        "Graceful termination timed out. "
+                                + "Sending forced termination signal to EC "
                                 + ecName + ". PID: " + processId
                 );
 
@@ -454,17 +576,27 @@ public class WatchdogService implements Service, ControlMessageHandler {
 
                 sendProgressResponse(
                         request,
-                        "Forced termination signal sent. Waiting up to 5 seconds for EC "
+                        "Forced termination signal sent. "
+                                + "Waiting up to 5 seconds for EC "
                                 + ecName + " to terminate."
                 );
 
-                terminated = awaitTermination(processToStop, 5);
+                terminated = processToStop.waitFor(
+                        5,
+                        TimeUnit.SECONDS
+                );
             }
+
+
+            // -------------------------------------------------
+            // 6.7. Verify process termination
+            // -------------------------------------------------
 
             if (!terminated) {
 
                 log.error(
-                        "[WatchdogService][handleStop] Unable to terminate EC process after forced termination"
+                        "[WatchdogService][handleStop] "
+                                + "Unable to terminate EC process"
                                 + " | ecName=" + ecName
                                 + " | pid=" + processId
                 );
@@ -477,26 +609,30 @@ public class WatchdogService implements Service, ControlMessageHandler {
                 );
             }
 
-            processes.remove(ecName, processToStop);
+
+            // -------------------------------------------------
+            // 6.8. Remove process registration
+            // -------------------------------------------------
+
+            processes.remove(
+                    ecName,
+                    processToStop
+            );
 
             log.info(() ->
-                    "[WatchdogService][handleStop] EC process stopped and registration removed"
+                    "[WatchdogService][handleStop] "
+                            + "EC process terminated successfully"
                             + " | ecName=" + ecName
                             + " | pid=" + processId
                             + " | trackedProcesses=" + processes.size()
             );
 
-            Map<String, String> response = new HashMap<>();
 
-            response.put(
-                    "body",
-                    "Process stopped. PID: " + processId
-            );
+            // -------------------------------------------------
+            // 6.9. Return successful response
+            // -------------------------------------------------
 
-            response.put(
-                    "status",
-                    "Process stopped. PID: " + processId
-            );
+            var response = new org.prats.definitions.records.ControlResponse("Process stopped. PID: " + processId, "Process stopped. PID: " + processId);
 
             return createResponseMessage(
                     request,
@@ -508,7 +644,8 @@ public class WatchdogService implements Service, ControlMessageHandler {
             Thread.currentThread().interrupt();
 
             log.warn(() ->
-                    "[WatchdogService][handleStop] Interrupted while waiting for EC process termination"
+                    "[WatchdogService][handleStop] "
+                            + "Interrupted while terminating EC"
                             + " | ecName=" + ecName
                             + " | pid=" + processId
             );
@@ -522,7 +659,8 @@ public class WatchdogService implements Service, ControlMessageHandler {
         } catch (SecurityException exception) {
 
             log.error(
-                    "[WatchdogService][handleStop] Unable to terminate EC process"
+                    "[WatchdogService][handleStop] "
+                            + "Permission denied while terminating EC"
                             + " | ecName=" + ecName
                             + " | pid=" + processId,
                     exception
@@ -537,34 +675,26 @@ public class WatchdogService implements Service, ControlMessageHandler {
         }
     }
 
-    private boolean awaitTermination(ProcessHandle process, long seconds) throws InterruptedException {
-        if (!process.isAlive()) {
-            return true;
-        }
-        try {
-            process.onExit().get(seconds, TimeUnit.SECONDS);
-            return true;
-        } catch (TimeoutException exception) {
-            return !process.isAlive();
-        } catch (ExecutionException exception) {
-            throw new IllegalStateException("Unable to observe EC process termination", exception.getCause());
-        }
-    }
+
+    // =========================================================
+    // 7. RESTART EXECUTION CONTAINER
+    // =========================================================
 
     private synchronized Message handleRestart(Message request) {
 
+        String ecName = getProcessFromRequest(request);
+
         log.info(() ->
-                "[WatchdogService][handleRestart] Restart request received"
+                "[WatchdogService][handleRestart] EC restart requested"
+                        + " | ecName=" + ecName
                         + " | correlationId=" + request.getCorrelationId()
         );
 
-        String ecName = getProcessFromRequest(request);
-
         if (ecName == null) {
 
-            log.warn(() ->
-                    "[WatchdogService][handleRestart] Restart request rejected because EC name is invalid"
-                            + " | correlationId=" + request.getCorrelationId()
+            log.warn(
+                    "[WatchdogService][handleRestart] "
+                            + "Restart rejected because EC name is invalid"
             );
 
             return createErrorResponse(
@@ -574,41 +704,69 @@ public class WatchdogService implements Service, ControlMessageHandler {
             );
         }
 
-        ProcessHandle processCheck = getProcess(ecName);
 
-        log.info(() ->
-                "[WatchdogService][handleRestart] Stopping existing EC process before restart"
+        // -----------------------------------------------------
+        // 7.1. Retrieve existing process
+        // -----------------------------------------------------
+
+        Process processCheck = getProcess(ecName);
+
+
+        // -----------------------------------------------------
+        // 7.2. Stop existing EC
+        // -----------------------------------------------------
+
+        log.debug(() ->
+                "[WatchdogService][handleRestart] "
+                        + "Stopping existing EC before restart"
                         + " | ecName=" + ecName
-                        + " | processRegistered=" + (processCheck != null)
-                        + " | processAlive=" + (processCheck != null && processCheck.isAlive())
         );
 
         Message stopResponse = handleStop(request);
+
+
+        // -----------------------------------------------------
+        // 7.3. Verify stop completion
+        // -----------------------------------------------------
 
         if ((processCheck != null && processCheck.isAlive())
                 || Thread.currentThread().isInterrupted()) {
 
             log.warn(() ->
-                    "[WatchdogService][handleRestart] Restart aborted because the existing process remains active or the thread is interrupted"
+                    "[WatchdogService][handleRestart] "
+                            + "Restart aborted"
                             + " | ecName=" + ecName
-                            + " | processAlive=" + (processCheck != null && processCheck.isAlive())
-                            + " | threadInterrupted=" + Thread.currentThread().isInterrupted()
+                            + " | processStillAlive="
+                            + (processCheck != null && processCheck.isAlive())
+                            + " | interrupted="
+                            + Thread.currentThread().isInterrupted()
             );
 
             return stopResponse;
         }
 
+
+        // -----------------------------------------------------
+        // 7.4. Start EC again
+        // -----------------------------------------------------
+
         log.info(() ->
-                "[WatchdogService][handleRestart] Existing process stop phase completed; starting EC"
+                "[WatchdogService][handleRestart] "
+                        + "Previous EC stopped; starting new process"
                         + " | ecName=" + ecName
         );
 
         return handleStart(request);
     }
 
+
+    // =========================================================
+    // 8. CREATE SUCCESS RESPONSE
+    // =========================================================
+
     private Message createResponseMessage(
             Message request,
-            Map<String, String> messageValues
+            org.prats.definitions.records.ControlResponse messageValues
     ) {
 
         Message response = messageParser.createResponse(
@@ -620,12 +778,18 @@ public class WatchdogService implements Service, ControlMessageHandler {
         response.setResponseComplete(true);
 
         log.debug(() ->
-                "[WatchdogService][createResponseMessage] Successful response created"
+                "[WatchdogService][createResponseMessage] "
+                        + "Success response created"
                         + " | correlationId=" + request.getCorrelationId()
         );
 
         return response;
     }
+
+
+    // =========================================================
+    // 9. CREATE ERROR RESPONSE
+    // =========================================================
 
     private Message createErrorResponse(
             Message request,
@@ -643,7 +807,8 @@ public class WatchdogService implements Service, ControlMessageHandler {
         response.setResponseComplete(true);
 
         log.debug(() ->
-                "[WatchdogService][createErrorResponse] Error response created"
+                "[WatchdogService][createErrorResponse] "
+                        + "Error response created"
                         + " | correlationId=" + request.getCorrelationId()
                         + " | errorCode=" + errorCode
         );
@@ -651,49 +816,53 @@ public class WatchdogService implements Service, ControlMessageHandler {
         return response;
     }
 
-    private void sendResponse(
-            Message response
-    ) {
+
+    // =========================================================
+    // 10. SEND CONTROL RESPONSE
+    // =========================================================
+
+    private void sendResponse(Message response) {
+
         try {
+
             Objects.requireNonNull(
                     response,
                     "Response cannot be null"
             );
 
             Objects.requireNonNull(
-                    controlChannelCommunicator,
+                    externalChanelCommunicator,
                     "ControlChannelCommunicator has not been initialized"
             ).sendResponse(response);
 
             log.debug(() ->
-                    "[WatchdogService][sendResponse] Response submitted to control channel"
+                    "[WatchdogService][sendResponse] "
+                            + "Response sent to control channel"
                             + " | correlationId=" + response.getCorrelationId()
+                            + " | status=" + response.getStatus()
             );
 
         } catch (RuntimeException exception) {
+
             log.error(
-                    "[WatchdogService][sendResponse] Unable to submit response",
+                    "[WatchdogService][sendResponse] "
+                            + "Unable to send control response",
                     exception
             );
         }
     }
+
+
+    // =========================================================
+    // 11. SEND PROGRESS RESPONSE
+    // =========================================================
 
     private void sendProgressResponse(
             Message request,
             String status
     ) {
 
-        Map<String, String> responseValues = new HashMap<>();
-
-        responseValues.put(
-                "body",
-                status
-        );
-
-        responseValues.put(
-                "status",
-                status
-        );
+        var responseValues = new org.prats.definitions.records.ControlResponse(status, status);
 
         Message response = messageParser.createResponse(
                 request.getCorrelationId(),
@@ -704,7 +873,8 @@ public class WatchdogService implements Service, ControlMessageHandler {
         response.setResponseComplete(false);
 
         log.debug(() ->
-                "[WatchdogService][sendProgressResponse] Sending progress update"
+                "[WatchdogService][sendProgressResponse] "
+                        + "Sending operation progress"
                         + " | correlationId=" + request.getCorrelationId()
                         + " | status=" + status
         );
@@ -712,25 +882,35 @@ public class WatchdogService implements Service, ControlMessageHandler {
         sendResponse(response);
     }
 
-    private void handleRequest(
-            Message request
-    ) {
+
+    // =========================================================
+    // 12. CONTROL REQUEST PROCESSING
+    // =========================================================
+
+    private void handleRequest(Message request) {
+
         Objects.requireNonNull(
                 request,
                 "Request cannot be null"
         );
 
         log.info(() ->
-                "[WatchdogService][handleRequest] Control request received"
-                        + " | correlationId=" + request.getCorrelationId()
+                "[WatchdogService][handleRequest] "
+                        + "Control request received"
                         + " | operation=" + request.getOperation()
+                        + " | correlationId=" + request.getCorrelationId()
         );
+
+
+        // -----------------------------------------------------
+        // 12.1. Validate correlation
+        // -----------------------------------------------------
 
         if (request.getCorrelationId() == null) {
 
-            log.warn(() ->
-                    "[WatchdogService][handleRequest] Control request ignored because correlation ID is missing"
-                            + " | operation=" + request.getOperation()
+            log.warn(
+                    "[WatchdogService][handleRequest] "
+                            + "Request ignored because correlation ID is missing"
             );
 
             return;
@@ -740,7 +920,17 @@ public class WatchdogService implements Service, ControlMessageHandler {
 
         try {
 
+
+            // -------------------------------------------------
+            // 12.2. Validate operation
+            // -------------------------------------------------
+
             if (request.getOperation() == null) {
+
+                log.warn(
+                        "[WatchdogService][handleRequest] "
+                                + "Control request operation is null"
+                );
 
                 response = createErrorResponse(
                         request,
@@ -748,16 +938,16 @@ public class WatchdogService implements Service, ControlMessageHandler {
                         "The request does not contain a valid operation."
                 );
 
-                log.warn(() ->
-                        "[WatchdogService][handleRequest] Control request has no operation"
-                                + " | correlationId=" + request.getCorrelationId()
-                );
-
             } else {
 
+
+                // ---------------------------------------------
+                // 12.3. Dispatch operation
+                // ---------------------------------------------
+
                 log.debug(() ->
-                        "[WatchdogService][handleRequest] Dispatching watchdog operation"
-                                + " | correlationId=" + request.getCorrelationId()
+                        "[WatchdogService][handleRequest] "
+                                + "Dispatching control operation"
                                 + " | operation=" + request.getOperation()
                 );
 
@@ -768,10 +958,6 @@ public class WatchdogService implements Service, ControlMessageHandler {
                     case STOP -> handleStop(request);
 
                     case RESTART -> handleRestart(request);
-                    case DIAGNOSTICS, RUN_GC -> {
-                        if (diagnostics == null) yield createErrorResponse(request, "DIAGNOSTICS_UNAVAILABLE", "Diagnostics not initialized.");
-                        yield diagnostics.handleRequest(request);
-                    }
 
                     default -> createErrorResponse(
                             request,
@@ -785,7 +971,8 @@ public class WatchdogService implements Service, ControlMessageHandler {
         } catch (Exception exception) {
 
             log.error(
-                    "[WatchdogService][handleRequest] Error processing control request"
+                    "[WatchdogService][handleRequest] "
+                            + "Unexpected error while processing control request"
                             + " | correlationId=" + request.getCorrelationId()
                             + " | operation=" + request.getOperation(),
                     exception
@@ -800,214 +987,312 @@ public class WatchdogService implements Service, ControlMessageHandler {
             );
         }
 
-        final Message completedResponse = response;
+
+        // -----------------------------------------------------
+        // 12.4. Return terminal response
+        // -----------------------------------------------------
+
+        final String status = response.getStatus();
 
         log.debug(() ->
-                "[WatchdogService][handleRequest] Control request processing completed"
+                "[WatchdogService][handleRequest] "
+                        + "Control request processing completed"
                         + " | correlationId=" + request.getCorrelationId()
+                        + " | responseStatus=" + status
         );
 
-        sendResponse(
-                completedResponse
-        );
+        sendResponse(response);
     }
 
+
+    // =========================================================
+    // 13. CONTROL MESSAGE CALLBACKS
+    // =========================================================
+
     @Override
-    public void onRequest(
-            Message request
-    ) {
+    public void onRequest(Message request) {
+
         Objects.requireNonNull(
                 request,
                 "Request cannot be null"
         );
 
         log.debug(() ->
-                "[WatchdogService][onRequest] Submitting control request to WATCHDOG worker pool"
-                        + " | correlationId=" + request.getCorrelationId()
+                "[WatchdogService][onRequest] "
+                        + "Submitting control request to worker pool"
                         + " | operation=" + request.getOperation()
+                        + " | correlationId=" + request.getCorrelationId()
         );
 
         try {
+
             submitToThreadPool(
-                    () -> handleRequest(
-                            request
-                    )
+                    () -> handleRequest(request)
             );
 
         } catch (RejectedExecutionException | IllegalStateException exception) {
 
             log.warn(() ->
-                    "[WatchdogService][onRequest] Unable to submit control request because worker pool is unavailable"
-                            + " | correlationId=" + request.getCorrelationId()
+                    "[WatchdogService][onRequest] "
+                            + "Unable to submit control request"
                             + " | operation=" + request.getOperation()
+                            + " | correlationId=" + request.getCorrelationId()
                             + " | reason=" + exception.getMessage()
             );
 
             if (request.getCorrelationId() != null) {
+
                 sendResponse(
                         createErrorResponse(
                                 request,
                                 "WATCHDOG_UNAVAILABLE",
-                                "WATCHDOG cannot process the request because its worker pool is unavailable."
+                                "WATCHDOG cannot process the request "
+                                        + "because its worker pool is unavailable."
                         )
                 );
             }
         }
     }
 
+
     @Override
     public void onInfo(Message request) {
+
         log.debug(() ->
-                "[WatchdogService][onInfo] Informational control message received"
-                        + " | correlationId=" + (request == null ? null : request.getCorrelationId())
+                "[WatchdogService][onInfo] "
+                        + "Informational control message received"
+                        + " | correlationId="
+                        + (request == null
+                        ? null
+                        : request.getCorrelationId())
         );
     }
+
 
     @Override
     public void onHeartbeat(Message response) {
+
         log.debug(() ->
-                "[WatchdogService][onHeartbeat] Heartbeat received"
-                        + " | correlationId=" + (response == null ? null : response.getCorrelationId())
+                "[WatchdogService][onHeartbeat] "
+                        + "Heartbeat received"
+                        + " | correlationId="
+                        + (response == null
+                        ? null
+                        : response.getCorrelationId())
         );
     }
 
+
     @Override
-    public void onResponse(
-            Message response
-    ) {
+    public void onResponse(Message response) {
 
         log.debug(() ->
-                "[WatchdogService][onResponse] Response received"
-                        + " | correlationId=" + (response == null ? null : response.getCorrelationId())
+                "[WatchdogService][onResponse] "
+                        + "Control response received"
+                        + " | correlationId="
+                        + (response == null
+                        ? null
+                        : response.getCorrelationId())
         );
     }
 
+
     @Override
-    public void onTimeout(
-            Message originalRequest
-    ) {
+    public void onTimeout(Message originalRequest, Throwable cause) {
 
         log.warn(() ->
-                "[WatchdogService][onTimeout] Watchdog control request timed out"
-                        + " | operation=" + originalRequest.getOperation()
-                        + " | correlationId=" + originalRequest.getCorrelationId()
+                "[WatchdogService][onTimeout] "
+                        + "Control request timed out"
+                        + " | operation="
+                        + (originalRequest == null
+                        ? null
+                        : originalRequest.getOperation())
+                        + " | correlationId="
+                        + (originalRequest == null
+                        ? null
+                        : originalRequest.getCorrelationId())
         );
     }
 
+
+    // =========================================================
+    // 14. START WATCHDOG
+    // =========================================================
+
+    @Override
     public void start() {
-        // A watchdog restart must recover supervision of existing ECs.
-        for (String ecName : ecConfigPaths.keySet()) {
-            getProcess(ecName);
-        }
-        log.info(() ->
-                "[WatchdogService][start] Starting WATCHDOG worker pool and transport service"
-                        + " | trackedProcesses=" + processes.size()
+
+        log.info(
+                "[WatchdogService][start] "
+                        + "Starting WATCHDOG worker pool"
         );
 
-        watchdogWorkers = new ThreadPool().initializeAndGetThreadPool(
-                1, 1, 0, true
-        );
+
+        // -----------------------------------------------------
+        // 14.1. Initialize worker pool
+        // -----------------------------------------------------
+
+        watchdogWorkers = new ThreadPool()
+                .initializeAndGetThreadPool(
+                        1,
+                        1,
+                        0,
+                        true
+                );
 
         log.debug(() ->
-                "[WatchdogService][start] WATCHDOG worker pool initialized"
-                        + " | poolType=" + watchdogWorkers.getClass().getSimpleName()
+                "[WatchdogService][start] "
+                        + "WATCHDOG worker pool initialized"
+                        + " | executorType="
+                        + watchdogWorkers.getClass().getSimpleName()
         );
 
+
+        // -----------------------------------------------------
+        // 14.2. Start transport service
+        // -----------------------------------------------------
+
         try {
+
             Objects.requireNonNull(
                     service,
                     "Watchdog transport service has not been configured"
             ).start();
 
-            log.info(() ->
-                    "[WatchdogService][start] WATCHDOG transport service started"
+            log.info(
+                    "[WatchdogService][start] "
+                            + "WATCHDOG transport service started successfully"
             );
 
         } catch (RuntimeException exception) {
+
             log.error(
-                    "[WatchdogService][start] Failed to start WATCHDOG transport service; shutting down worker pool",
+                    "[WatchdogService][start] "
+                            + "WATCHDOG transport startup failed",
                     exception
             );
 
             watchdogWorkers.shutdownNow();
             watchdogWorkers = null;
+
             throw exception;
         }
     }
 
+
+    // =========================================================
+    // 15. SHUTDOWN WATCHDOG
+    // =========================================================
+
     @Override
     public void shutdown() {
-        log.info("[WatchdogService][shutdown] Preserving EC processes; only watchdog resources will stop");
+
         log.info(() ->
-                "[WatchdogService][shutdown] WATCHDOG shutdown initiated"
-                        + " | trackedProcesses=" + processes.size()
+                "[WatchdogService][shutdown] "
+                        + "WATCHDOG shutdown requested"
+                        + " | trackedECProcesses=" + processes.size()
         );
 
-        boolean isTerminated = false;
+        /*
+         * IMPORTANT:
+         *
+         * Stopping the WATCHDOG must not automatically
+         * terminate the execution containers it launched.
+         */
+
+        log.info(
+                "[WatchdogService][shutdown] "
+                        + "Managed EC processes will remain running"
+        );
+
+
+        // -----------------------------------------------------
+        // 15.1. Shutdown transport service
+        // -----------------------------------------------------
+
         if (service != null) {
-            log.debug(() ->
-                    "[WatchdogService][shutdown] Shutting down transport service"
-                            + " | serviceType=" + service.getClass().getSimpleName()
+
+            log.debug(
+                    "[WatchdogService][shutdown] "
+                            + "Stopping control transport service"
             );
+
             service.shutdown();
         }
 
-        if (watchdogWorkers != null) {
-            watchdogWorkers.shutdown();
 
-            log.debug(() ->
-                    "[WatchdogService][shutdown] WATCHDOG worker pool shutdown requested"
+        // -----------------------------------------------------
+        // 15.2. Shutdown worker pool
+        // -----------------------------------------------------
+
+        ExecutorService workers = watchdogWorkers;
+
+        if (workers != null) {
+
+            workers.shutdown();
+
+            log.debug(
+                    "[WatchdogService][shutdown] "
+                            + "Worker pool shutdown requested"
             );
 
             try {
-                if (!watchdogWorkers.awaitTermination(
+
+                if (!workers.awaitTermination(
                         5,
                         TimeUnit.SECONDS
                 )) {
-                    log.warn(() ->
-                            "[WatchdogService][shutdown] Worker pool did not terminate within timeout; forcing shutdown"
+
+                    log.warn(
+                            "[WatchdogService][shutdown] "
+                                    + "Worker pool shutdown timed out"
+                                    + " | action=SHUTDOWN_NOW"
                     );
 
-                    watchdogWorkers.shutdownNow();
-                    if (watchdogWorkers.isShutdown())
-                        isTerminated = true;
+                    workers.shutdownNow();
+
                 } else {
-                    log.debug(() ->
-                            "[WatchdogService][shutdown] WATCHDOG worker pool terminated gracefully"
+
+                    log.debug(
+                            "[WatchdogService][shutdown] "
+                                    + "Worker pool terminated gracefully"
                     );
                 }
 
             } catch (InterruptedException exception) {
-                log.warn(() ->
-                        "[WatchdogService][shutdown] Interrupted while awaiting worker pool termination"
-                );
 
                 Thread.currentThread().interrupt();
-                watchdogWorkers.shutdownNow();
+
+                log.warn(
+                        "[WatchdogService][shutdown] "
+                                + "Interrupted while awaiting worker termination"
+                );
+
+                workers.shutdownNow();
             }
-        } else {
-            log.debug(() ->
-                    "[WatchdogService][shutdown] WATCHDOG worker pool was not initialized"
-            );
+
+            if (workers.isTerminated()) {
+                watchdogWorkers = null;
+            }
         }
 
-        if (isTerminated) {
-            watchdogWorkers = null;
-        }
-
-        final boolean workerPoolReferenceCleared = isTerminated;
-
-        log.info(() ->
-                "[WatchdogService][shutdown] WATCHDOG shutdown sequence completed"
-                        + " | workerPoolReferenceCleared=" + workerPoolReferenceCleared
-                        + " | workerPoolPresent=" + (watchdogWorkers != null)
+        log.info(
+                "[WatchdogService][shutdown] "
+                        + "WATCHDOG shutdown sequence completed"
         );
     }
 
+
+    // =========================================================
+    // 16. QUIESCE WATCHDOG
+    // =========================================================
+
     @Override
     public void quiesce() {
-        log.info(() ->
-                "[WatchdogService][quiesce] Quiescing WATCHDOG transport service"
+
+        log.info(
+                "[WatchdogService][quiesce] "
+                        + "Quiescing WATCHDOG transport"
         );
 
         if (service != null) {
@@ -1015,11 +1300,18 @@ public class WatchdogService implements Service, ControlMessageHandler {
         }
     }
 
+
+    // =========================================================
+    // 17. DRAIN WATCHDOG
+    // =========================================================
+
     @Override
     public void drain(long timeout) {
+
         log.info(() ->
-                "[WatchdogService][drain] Draining WATCHDOG transport service"
-                        + " | timeout=" + timeout
+                "[WatchdogService][drain] "
+                        + "Draining WATCHDOG transport"
+                        + " | timeoutMillis=" + timeout
         );
 
         if (service != null) {
@@ -1027,25 +1319,38 @@ public class WatchdogService implements Service, ControlMessageHandler {
         }
     }
 
+
+    // =========================================================
+    // 18. CLEANUP STALE PROCESSES
+    // =========================================================
+
     @Override
     public void cleanup() {
-        int processCountBeforeCleanup = processes.size();
+
+        int before = processes.size();
 
         processes.entrySet().removeIf(
                 entry -> !entry.getValue().isAlive()
         );
 
-        int processCountAfterCleanup = processes.size();
+        int after = processes.size();
 
         log.debug(() ->
-                "[WatchdogService][cleanup] Removed stale process registrations"
-                        + " | trackedBefore=" + processCountBeforeCleanup
-                        + " | trackedAfter=" + processCountAfterCleanup
-                        + " | removed=" + (processCountBeforeCleanup - processCountAfterCleanup)
+                "[WatchdogService][cleanup] "
+                        + "Stale process cleanup completed"
+                        + " | before=" + before
+                        + " | after=" + after
+                        + " | removed=" + (before - after)
         );
     }
 
+
+    // =========================================================
+    // 19. WORKER POOL SUBMISSION
+    // =========================================================
+
     private void submitToThreadPool(Runnable runnable) {
+
         Objects.requireNonNull(
                 runnable,
                 "Runnable cannot be null"
@@ -1057,8 +1362,10 @@ public class WatchdogService implements Service, ControlMessageHandler {
         );
 
         if (workers.isShutdown()) {
-            log.warn(() ->
-                    "[WatchdogService][submitToThreadPool] Submission rejected because WATCHDOG worker pool is shut down"
+
+            log.warn(
+                    "[WatchdogService][submitToThreadPool] "
+                            + "Task submission rejected because worker pool is shut down"
             );
 
             throw new RejectedExecutionException(
@@ -1069,8 +1376,9 @@ public class WatchdogService implements Service, ControlMessageHandler {
         workers.submit(runnable);
 
         log.debug(() ->
-                "[WatchdogService][submitToThreadPool] Task submitted to WATCHDOG worker pool"
-                        + " | poolShutdown=" + workers.isShutdown()
+                "[WatchdogService][submitToThreadPool] "
+                        + "Task submitted to WATCHDOG worker pool"
+                        + " | shutdown=" + workers.isShutdown()
         );
     }
 }

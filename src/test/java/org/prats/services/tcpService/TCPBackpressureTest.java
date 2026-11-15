@@ -16,6 +16,7 @@ class TCPBackpressureTest {
         public void informShutdown(){}
         public void cleanupCorrelations(){}
         public void reconcilePeers(){}
+        public boolean isPeerRegistered(String peerId){return false;}
     };
     @Test void oversizedOutgoingMessagesAreRejectedWithoutRetention() throws Exception {
         TCPService service=new TCPService(1,1,60,15000,50,false,processor);

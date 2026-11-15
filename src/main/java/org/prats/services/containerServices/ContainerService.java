@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 
-public abstract class ContainerService implements Service, ServiceStatusReporter, CommandDispatcher, ServiceManager, HealthCheckable, ControlMessageHandler {
+public abstract class ContainerService implements Service, ServiceStatusReporter, CommandDispatcher, ServiceManager, HealthCheckable, TCPMessageHandler {
 
     private static final EngineLogger log =
             EngineLogger.getLogger(ContainerService.class);
@@ -38,7 +38,7 @@ public abstract class ContainerService implements Service, ServiceStatusReporter
 
     protected ExecutorService containerWorkers;
     protected MessageDispatcher messageDispatcher;
-    protected ControlChannelCommunicator controlChannelCommunicator;
+    protected ExternalChanelCommunicator externalChanelCommunicator;
 
     protected volatile ScheduledExecutorService scheduledThread;
 
@@ -107,11 +107,11 @@ public abstract class ContainerService implements Service, ServiceStatusReporter
         log.debug("[ContainerService][setMessageDispatcher] Message dispatcher configured");
     }
 
-    public void setControlChannelCommunicator(ControlChannelCommunicator controlChannelCommunicator) {
+    public void setControlChannelCommunicator(ExternalChanelCommunicator externalChanelCommunicator) {
 
         log.debug("[ContainerService][setControlChannelCommunicator] Updating control channel communicator");
 
-        this.controlChannelCommunicator = controlChannelCommunicator;
+        this.externalChanelCommunicator = externalChanelCommunicator;
 
         log.debug("[ContainerService][setControlChannelCommunicator] Control channel communicator configured");
     }

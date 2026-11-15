@@ -36,15 +36,15 @@ class PlatformControlHandlerTest {
     @Test
     void successfulStartDisplaysStatus() throws Exception {
         Message response = watchdog.createResponse(UUID.randomUUID(),
-                Map.of("status", "Process started. PID: 123"));
+                new org.prats.definitions.records.ControlResponse("Process started. PID: 123", "Process started. PID: 123"));
         response.setStatus("SUCCESS");
         assertEquals("Process started. PID: 123", handler.watchdogResponseText(response));
     }
 
     @Test
-    void malformedSuccessDoesNotUseAnErrorDescription() throws Exception {
+    void envelopeErrorTakesPrecedenceOverSuccessStatus() throws Exception {
         Message response = watchdog.createErrorResponse(UUID.randomUUID(), "INVALID", "invalid");
         response.setStatus("SUCCESS");
-        assertNull(handler.watchdogResponseText(response));
+        assertEquals("invalid", handler.watchdogResponseText(response));
     }
 }

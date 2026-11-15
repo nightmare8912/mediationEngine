@@ -8,7 +8,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.prats.definitions.enums.MessageType;
 import org.prats.definitions.enums.Operation;
 import org.prats.definitions.enums.ProcessType;
-import org.prats.security.ClientSessionContext;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -38,8 +37,6 @@ public final class Message {
     public void setApplicationRequest(Message value) { applicationRequest = value; }
 
 
-    @JsonIgnore
-    private ClientSessionContext clientSession;
 
     private final UUID messageId;
     private UUID correlationId;
@@ -287,9 +284,7 @@ public final class Message {
         this.error = error;
     }
 
-    @JsonIgnore
-    public ClientSessionContext getClientSession() { return clientSession; }
-
-    @JsonIgnore
-    public void setClientSession(ClientSessionContext session) { clientSession = session; }
+    public boolean hasError() {
+        return error != null;
+    }
 }

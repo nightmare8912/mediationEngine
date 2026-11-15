@@ -3,6 +3,7 @@ package org.prats.services.containerServices;
 
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.enums.ContainerType;
+import org.prats.definitions.interfaces.TCPMessageHandler;
 import org.prats.definitions.records.ConsolidatedECConfig;
 import org.prats.definitions.records.ConsolidatedWatchdogConfig;
 import org.prats.definitions.records.Platform;
@@ -31,7 +32,7 @@ import java.util.concurrent.TimeUnit;
 // it then indefinitely waits for a command from the platform to terminate/re-launch the process and it should have the capability to do it.
 // the host on the platform is different, it is a light weight host again with one extra capability, if the platform asks it to re-launch, it can do it.
 // it would send repeated periodic heart-beats to platform to check on its health, and would initiate a restart if the platform is unresponsive.
-public class PlatformService extends ContainerService implements ExecutionContainerManager {
+public class PlatformService extends ContainerService implements ExecutionContainerManager, TCPMessageHandler {
 
     private static final EngineLogger log =
             EngineLogger.getLogger(PlatformService.class);
@@ -353,7 +354,7 @@ public class PlatformService extends ContainerService implements ExecutionContai
     }
 
     @Override
-    public void onTimeout(Message originalRequest) {
+    public void onTimeout(Message originalRequest, Throwable cause) {
 
         log.debug("[PlatformService][onTimeout] Timeout handler invoked");
     }

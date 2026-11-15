@@ -1,2 +1,4 @@
 rootProject.name = 'mediationEngine2'
+include 'src:main:security'
+findProject(':src:main:security')?.name = 'security'
 

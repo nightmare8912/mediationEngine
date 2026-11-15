@@ -17,7 +17,6 @@ public class ExecutionContainerCommandHandler {
     protected final ServiceManager serviceManager;
     protected final CommandParser commandParser;
 
-    protected final String COMMAND_FIELD = "body";
     protected final String INVALID_COMMAND = "Invalid Command.";
 
     private final HealthReportFormatter healthReportFormatter =
@@ -145,7 +144,7 @@ public class ExecutionContainerCommandHandler {
                         + " | correlationId=" + command.getCorrelationId()
         );
 
-        return commandParser.createCommandResponse(command, INVALID_COMMAND);
+        return commandParser.createErrorResponse(command.getCorrelationId(), "UNKNOWN_COMMAND", INVALID_COMMAND);
     }
 
     public Message handleCommand(Message command) {
@@ -158,11 +157,7 @@ public class ExecutionContainerCommandHandler {
         String plainCommand;
 
         try {
-            plainCommand = commandParser.extractPayloadField(
-                    command,
-                    COMMAND_FIELD,
-                    String.class
-            );
+            plainCommand = commandParser.fromPayload(command.getPayload(), org.prats.definitions.records.CommandRequest.class).body();
 
         } catch (JsonProcessingException e) {
 

@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import org.prats.definitions.classes.Error;
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.enums.MessageType;
 import org.prats.definitions.enums.Operation;
@@ -28,7 +29,7 @@ public class MessageParser {
     private final ObjectMapper objectMapper;
     private final ProcessType processType;
 
-    private final JsonNode errorPayload;
+
 
 
     public MessageParser(ProcessType processType) {
@@ -43,11 +44,7 @@ public class MessageParser {
                 SerializationFeature.WRITE_DATES_AS_TIMESTAMPS
         );
 
-        ObjectNode error = objectMapper.createObjectNode();
-        error.put("errorCode", "JSON_DECODING_ERROR");
-        error.put("error", "Unable to parse incoming message");
 
-        this.errorPayload = error;
     }
 
 
@@ -80,12 +77,15 @@ public class MessageParser {
                     MessageType.UNKNOWN,
                     ProcessType.UNKNOWN,
                     Operation.UNKNOWN,
-                    errorPayload,
+                    NullNode.instance,
                     message,
                     null
             );
         }
 
+        if (messageDefinition.getMessageType() == MessageType.UNKNOWN) {
+            attachError(messageDefinition, "JSON_DECODING_ERROR", "Unable to parse incoming message");
+        }
         return messageDefinition;
     }
 
@@ -111,11 +111,12 @@ public class MessageParser {
                         MessageType.UNKNOWN,
                         processType,
                         Operation.UNKNOWN,
-                        errorPayload,
+                        NullNode.instance,
                         message.getFullStringOriginalMessage(),
                         null
                 );
 
+                attachError(fallbackMessage, "JSON_ENCODING_ERROR", "Unable to serialize outgoing message");
                 jsonMessage = objectMapper.writeValueAsString(fallbackMessage);
 
             } catch (JsonProcessingException ignored) {
@@ -155,48 +156,38 @@ public class MessageParser {
             String errorCode,
             String errorDescription
     ) {
+
         Objects.requireNonNull(correlationId, "Correlation ID cannot be null");
+
         Objects.requireNonNull(errorCode, "Error code cannot be null");
+
         Objects.requireNonNull(errorDescription, "Error description cannot be null");
 
-        ObjectNode payload = objectMapper.createObjectNode();
 
-        payload.put("errorCode", errorCode);
-        payload.put("errorDescription", errorDescription);
+        Message response = createResponse(correlationId, NullNode.instance);
 
-        return new Message(
-                MessageType.RESPONSE,
-                processType,
-                Operation.INFO,
-                payload,
-                null,
-                null,
-                correlationId
-        );
+        return attachError(response, errorCode, errorDescription);
     }
 
-    public Message createResponse(
-            UUID correlationId,
-            Map<String, String> messageValues
-    ) {
+    public Message attachError(Message message, String code, String description) {
+
+        Error error = new Error();
+
+        error.setErrorCode(code);
+        error.setErrorMessage(description);
+        message.setError(error);
+
+        message.setStatus("FAILED");
+
+        message.setResponseComplete(true);
+
+        return message;
+    }
+
+    public Message createResponse(UUID correlationId, Object payload) {
         Objects.requireNonNull(correlationId, "Correlation ID cannot be null");
-        Objects.requireNonNull(messageValues, "Message cannot be null");
-
-        ObjectNode payload = objectMapper.createObjectNode();
-
-        for (Map.Entry<String, String> field: messageValues.entrySet()) {
-            payload.put(field.getKey(), field.getValue());
-        }
-
-        return new Message(
-                MessageType.RESPONSE,
-                processType,
-                Operation.INFO,
-                payload,
-                null,
-                null,
-                correlationId
-        );
+        return new Message(MessageType.RESPONSE, processType, Operation.INFO,
+                toPayload(payload), null, null, correlationId);
     }
 
     public <T> Message putPayloadField(
@@ -274,6 +265,37 @@ public class MessageParser {
 
             throw exception;
         }
+    }
+
+    public <T> JsonNode toPayload(T object) {
+
+        Objects.requireNonNull(
+                object,
+                "Payload object cannot be null"
+        );
+
+        return objectMapper.valueToTree(object);
+    }
+
+    public <T> T fromPayload(
+            JsonNode payload,
+            Class<T> payloadType
+    ) throws JsonProcessingException {
+
+        Objects.requireNonNull(
+                payload,
+                "Payload cannot be null"
+        );
+
+        Objects.requireNonNull(
+                payloadType,
+                "Payload type cannot be null"
+        );
+
+        return objectMapper.treeToValue(
+                payload,
+                payloadType
+        );
     }
 
     protected ObjectMapper getObjectMapper() {

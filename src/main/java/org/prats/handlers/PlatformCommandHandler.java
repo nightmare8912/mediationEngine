@@ -34,13 +34,6 @@ public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
     protected String commandHelp() {
         return super.commandHelp() + """
 
-                ACCOUNTS (available on the platform connection)
-                  mng register <username> <password>  Create an active account.
-                  mng login <username> <password>     Log in on this connection.
-                  mng whoami                          Show the logged-in user.
-                  mng logout                          End this connection's session.
-                Passwords must contain 10–128 characters. Management commands require login.
-
                 PLATFORM EC COMMANDS
                   mng health report <ec-id>      Show the latest EC heartbeat and service health.
                   mng start ec <ec-id>           Start an EC through its watchdog.
@@ -67,12 +60,7 @@ public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
         // 1. Extract and normalize the command first.
         try {
 
-            plainCommand = commandParser
-                    .extractPayloadField(
-                            command,
-                            COMMAND_FIELD,
-                            String.class
-                    )
+            plainCommand = commandParser.fromPayload(command.getPayload(), org.prats.definitions.records.CommandRequest.class).body()
                     .trim()
                     .replaceAll("\\s+", " ");
 

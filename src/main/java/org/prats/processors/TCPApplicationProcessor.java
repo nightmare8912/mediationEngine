@@ -1,198 +1,195 @@
+
 package org.prats.processors;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+
 import org.prats.definitions.classes.ClientConnection;
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.classes.ProcessContext;
-import org.prats.definitions.enums.MessageType;
 import org.prats.definitions.enums.Operation;
 import org.prats.definitions.enums.TCPConnectionMode;
 import org.prats.definitions.interfaces.MessageDispatcher;
 import org.prats.definitions.interfaces.TCPProcessor;
+import org.prats.definitions.records.CommandResponse;
 import org.prats.definitions.records.TCPPeer;
 import org.prats.loggers.EngineLogger;
+import org.prats.managers.TCPHandshakeManager;
 import org.prats.parsers.MessageParser;
 import org.prats.replyChannels.TCPReplyChannel;
+import org.prats.services.messageService.MessageService;
 import org.prats.services.tcpService.TCPService;
 
-import java.io.IOException;
 import java.net.Socket;
-import java.util.*;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class TCPApplicationProcessor implements TCPProcessor {
 
     private static final EngineLogger log =
             EngineLogger.getLogger(TCPApplicationProcessor.class);
 
+    // ---------------------------------------------------------
+    // DEPENDENCIES
+    // ---------------------------------------------------------
+
     private final MessageDispatcher messageDispatcher;
+
     private final MessageParser messageParser;
 
-    private final TCPConnectionMode connectionMode
-            = TCPConnectionMode.SERVER_AND_PEERS;
+    private volatile TCPService tcpService;
+
+    // ---------------------------------------------------------
+    // CONNECTION CONFIGURATION
+    // ---------------------------------------------------------
+
+    private final TCPConnectionMode connectionMode =
+            TCPConnectionMode.SERVER_AND_PEERS;
 
     private final List<TCPPeer> configuredApplicationPeers;
 
-    private final Map<String, ClientConnection> activePeerConnections =
-            new ConcurrentHashMap<>();
+    // ---------------------------------------------------------
+    // HANDSHAKE AND PEER REGISTRATION
+    // ---------------------------------------------------------
 
-    private TCPService tcpService;
-    private boolean guiIngressEnabled;
+    /*
+     * The handshake manager owns the active peer registry.
+     *
+     * IMPORTANT:
+     *
+     * This registry is ONLY for registered application peers
+     * such as EC01, EC02, etc.
+     *
+     * An ordinary incoming TCP connection does not need
+     * to be registered as an application peer.
+     *
+     * Shell clients and normal application clients can
+     * continue submitting requests without a handshake.
+     */
+    private final TCPHandshakeManager handshakeManager;
 
-    @Override
-    public List<Socket> connectedSockets() {
-
-        return activePeerConnections.values().stream().
-                map(ClientConnection::getSocket)
-                .filter(socket -> !socket.isClosed())
-                .toList();
-
-    }
-
-    public void setGUIIngressEnabled(boolean enabled) { this.guiIngressEnabled = enabled; }
-
-    private Message accountCommand(String raw) {
-
-        log.debug(() ->
-                "[CommandProcessor][accountCommand] Checking incoming command"
-                        + " | commandPresent=" + (raw != null)
-        );
-
-        String[] parts = raw.trim().split("\\s+", 4);
-
-        /*
-         * Validate that the command belongs to the account
-         * management category and uses a supported action.
-         */
-        if (parts.length < 2
-                || !parts[0].equalsIgnoreCase("mng")
-                || !Set.of(
-                "register",
-                "login",
-                "logout",
-                "whoami"
-        ).contains(parts[1].toLowerCase(Locale.ROOT))) {
-
-            log.debug(() ->
-                    "[CommandProcessor][accountCommand] Command not recognized as an account command"
-            );
-
-            return null;
-        }
-
-        /*
-         * Normalize the action using a locale-independent
-         * lowercase conversion.
-         */
-        String action = parts[1].toLowerCase(Locale.ROOT);
-
-        log.debug(() ->
-                "[CommandProcessor][accountCommand] Account command recognized"
-                        + " | action=" + action
-                        + " | argumentCount=" + Math.max(0, parts.length - 2)
-        );
-
-        /*
-         * Construct the internal command payload.
-         *
-         * Never log usernames/passwords or the raw
-         * command because credentials may be present.
-         */
-        Map<String, Object> values = new HashMap<>();
-
-        values.put("action", action);
-        values.put("textReply", true);
-
-        if (parts.length > 2) {
-
-            values.put("username", parts[2]);
-
-            log.debug(() ->
-                    "[CommandProcessor][accountCommand] Username argument provided"
-                            + " | action=" + action
-            );
-        }
-
-        if (parts.length > 3) {
-
-            values.put("password", parts[3]);
-
-            log.debug(() ->
-                    "[CommandProcessor][accountCommand] Password argument provided"
-                            + " | action=" + action
-            );
-        }
-
-        /*
-         * Convert the parsed command into the internal
-         * message structure for GUI request processing.
-         */
-        log.debug(() ->
-                "[CommandProcessor][accountCommand] Creating internal account request"
-                        + " | action=" + action
-                        + " | operation=GUI"
-                        + " | messageType=REQUEST"
-        );
-
-        Message message = messageParser.createEmptyMessage();
-
-        message.setMessageType(MessageType.REQUEST);
-        message.setOperation(Operation.GUI);
-        message.setPayload(
-                messageParser.convertToJsonNode(values)
-        );
-
-        log.debug(() ->
-                "[CommandProcessor][accountCommand] Account request created successfully"
-                        + " | action=" + action
-                        + " | correlationId=" + message.getCorrelationId()
-                        + " | operation=" + message.getOperation()
-                        + " | messageType=" + message.getMessageType()
-        );
-
-        return message;
-    }
+    // ---------------------------------------------------------
+    // CONSTRUCTOR
+    // ---------------------------------------------------------
 
     public TCPApplicationProcessor(
             List<TCPPeer> configuredPeers,
             MessageDispatcher messageDispatcher,
             MessageParser messageParser
     ) {
-        this.configuredApplicationPeers = configuredPeers;
-        this.messageDispatcher = messageDispatcher;
-        this.messageParser = messageParser;
+
+        this.configuredApplicationPeers = List.copyOf(
+                Objects.requireNonNull(
+                        configuredPeers,
+                        "Configured application peers cannot be null"
+                )
+        );
+
+        this.messageDispatcher = Objects.requireNonNull(
+                messageDispatcher,
+                "Message dispatcher cannot be null"
+        );
+
+        this.messageParser = Objects.requireNonNull(
+                messageParser,
+                "Message parser cannot be null"
+        );
+
+        /*
+         * Configure handshake management.
+         *
+         * The manager will:
+         *
+         * 1. Initiate handshakes for outgoing EC connections.
+         * 2. Process incoming handshake requests.
+         * 3. Process incoming handshake responses.
+         * 4. Register successfully handshaken peers.
+         * 5. Track pending handshakes.
+         * 6. Remove expired or disconnected peers.
+         *
+         * It does NOT prevent this processor from
+         * accepting ordinary application clients.
+         */
+        this.handshakeManager =
+                new TCPHandshakeManager(
+                        this.configuredApplicationPeers,
+                        this.messageParser,
+                        this::writeHandshakeMessage
+                );
 
         log.info(() ->
-                "[TCPApplicationProcessor][constructor] TCP application processor initialized"
+                "[TCPApplicationProcessor][constructor] "
+                        + "TCP application processor initialized"
                         + " | connectionMode=" + connectionMode
                         + " | configuredPeers="
-                        + (configuredPeers == null ? 0 : configuredPeers.size())
+                        + configuredApplicationPeers.size()
                         + " | messageDispatcher="
-                        + (messageDispatcher == null
-                        ? "null"
-                        : messageDispatcher.getClass().getSimpleName())
+                        + messageDispatcher.getClass().getSimpleName()
+                        + " | handshakeManagerEnabled=true"
         );
     }
 
-    public void setTcpService(TCPService tcpService) {
-        this.tcpService = tcpService;
+    // ---------------------------------------------------------
+    // DEPENDENCY INJECTION
+    // ---------------------------------------------------------
+
+    public void setTcpService(
+            TCPService tcpService
+    ) {
+
+        this.tcpService = Objects.requireNonNull(
+                tcpService,
+                "TCP service cannot be null"
+        );
 
         log.debug(() ->
-                "[TCPApplicationProcessor][setTcpService] TCP service configured"
+                "[TCPApplicationProcessor][setTcpService] "
+                        + "TCP service configured"
                         + " | serviceType="
-                        + (tcpService == null
-                        ? "null"
-                        : tcpService.getClass().getSimpleName())
+                        + tcpService.getClass().getSimpleName()
         );
     }
 
-//    private void registerHandshake(Message handshake, ClientConnection clientConnection) {
-//        activePeerConnections.put(
-//                handshake.getProcessName(),
-//                clientConnection
-//        );
-//    }
+    // ---------------------------------------------------------
+    // CONNECTED PEER SOCKETS
+    // ---------------------------------------------------------
+
+    @Override
+    public List<Socket> connectedSockets() {
+
+        /*
+         * Return only registered EC peer sockets.
+         *
+         * Ordinary shell/client sockets are managed
+         * by TCPService, not the active peer registry.
+         */
+        return handshakeManager.connectedSockets();
+    }
+
+    // ---------------------------------------------------------
+    // PEER REGISTRATION
+    // ---------------------------------------------------------
+
+    @Override
+    public boolean isPeerRegistered(
+            String peerId
+    ) {
+
+        return handshakeManager.isPeerRegistered(peerId);
+    }
+
+    public boolean isPeerConnected(
+            String peerId
+    ) {
+
+        return handshakeManager.isPeerConnected(peerId);
+    }
+
+    // ---------------------------------------------------------
+    // INCOMING MESSAGE PROCESSING
+    // ---------------------------------------------------------
 
     @Override
     public void processIncoming(
@@ -201,86 +198,126 @@ public class TCPApplicationProcessor implements TCPProcessor {
     ) {
 
         log.debug(() ->
-                "[TCPApplicationProcessor][processIncoming] Incoming TCP message received"
-                        + " | messageLength=" + (rawMessage == null ? 0 : rawMessage.length())
-                        + " | clientConnectionPresent=" + (clientConnection != null)
-                        + " | processName=" + ProcessContext.getProcessName()
+                "[TCPApplicationProcessor][processIncoming] "
+                        + "Incoming TCP message received"
+                        + " | messageLength="
+                        + (rawMessage == null ? 0 : rawMessage.length())
+                        + " | clientConnectionPresent="
+                        + (clientConnection != null)
+                        + " | processName="
+                        + ProcessContext.getProcessName()
         );
 
         try {
 
+            Objects.requireNonNull(
+                    clientConnection,
+                    "Client connection cannot be null"
+            );
+
+            // ---------------------------------------------
+            // PARSE INCOMING MESSAGE
+            // ---------------------------------------------
+
             /*
-             * Check whether the incoming message is an account command.
+             * Preserve the existing MessageParser behavior.
              *
-             * Account commands are converted directly into internal
-             * GUI request messages. All other messages are passed
-             * to the standard JSON message parser.
-             */
-            log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] Checking for account command"
-                            + " | accountServiceAvailable=" + guiIngressEnabled
-            );
-
-            Message accountRequest =
-                    !guiIngressEnabled
-                            ? null
-                            : accountCommand(rawMessage);
-
-            log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] Account command detection completed"
-                            + " | accountCommandRecognized=" + (accountRequest != null)
-            );
-
-            /*
-             * Parse the incoming message into the internal
-             * message representation.
+             * JSON messages are parsed normally.
+             *
+             * Plain-text shell commands are converted
+             * into your existing command message format
+             * by the MessageParser.
              */
             Message incomingMessage =
-                    accountRequest != null
-                            ? accountRequest
-                            : messageParser.createMessageFromJSON(rawMessage);
+                    Objects.requireNonNull(
+                            messageParser.createMessageFromJSON(
+                                    rawMessage
+                            ),
+                            "Parsed application message cannot be null"
+                    );
 
             log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] Initial message parsing completed"
-                            + " | messageParsed=" + (incomingMessage != null)
-                            + " | operation=" + (incomingMessage == null ? null : incomingMessage.getOperation())
-                            + " | messageType=" + (incomingMessage == null ? null : incomingMessage.getMessageType())
-                            + " | correlationId=" + (incomingMessage == null ? null : incomingMessage.getCorrelationId())
+                    "[TCPApplicationProcessor][processIncoming] "
+                            + "Initial message parsing completed"
+                            + " | operation="
+                            + incomingMessage.getOperation()
+                            + " | messageType="
+                            + incomingMessage.getMessageType()
+                            + " | correlationId="
+                            + incomingMessage.getCorrelationId()
+                            + " | sender="
+                            + incomingMessage.getProcessName()
             );
+
+            // ---------------------------------------------
+            // HANDSHAKE PROCESSING
+            // ---------------------------------------------
 
             /*
-             * Attach the client session to the incoming message.
+             * Check whether this is an EC handshake message.
              *
-             * Downstream handlers can use this session for
-             * authorization and account-related operations.
+             * Only HANDSHAKE_REQUEST and HANDSHAKE_RESPONSE
+             * are handled by TCPHandshakeManager.
+             *
+             * If this is a handshake message, the manager
+             * processes it and we return immediately.
+             *
+             * Normal shell/application messages skip
+             * this branch and continue to MessageService.
              */
-            log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] Attaching client session"
-                            + " | correlationId=" + incomingMessage.getCorrelationId()
-                            + " | sessionPresent=" + (clientConnection.getSessionContext() != null)
-            );
+            if (handshakeManager.processHandshake(
+                    incomingMessage,
+                    clientConnection
+            )) {
 
-            incomingMessage.setClientSession(
-                    clientConnection.getSessionContext()
-            );
+                log.debug(() ->
+                        "[TCPApplicationProcessor][processIncoming] "
+                                + "Application peer handshake processed"
+                                + " | messageType="
+                                + incomingMessage.getMessageType()
+                                + " | peerId="
+                                + incomingMessage.getProcessName()
+                                + " | activePeers="
+                                + handshakeManager.getActivePeerCount()
+                                + " | pendingHandshakes="
+                                + handshakeManager.getPendingHandshakeCount()
+                );
 
-            log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] Client session attached successfully"
-                            + " | correlationId=" + incomingMessage.getCorrelationId()
-            );
-
-            // The transport supplies session context. GUIHandler requests authorization over MessageService.
-            if (guiIngressEnabled && incomingMessage.getOperation() != Operation.GUI) {
-                Message envelope = messageParser.createEmptyMessage();
-                envelope.setMessageType(MessageType.REQUEST);
-                envelope.setOperation(Operation.GUI);
-                envelope.setCorrelationId(incomingMessage.getCorrelationId());
-                envelope.setPayload(messageParser.convertToJsonNode(Map.of("action", "application")));
-                envelope.setClientSession(clientConnection.getSessionContext());
-                envelope.setApplicationRequest(incomingMessage);
-                dispatchIncoming(envelope, clientConnection);
                 return;
             }
+
+            // ---------------------------------------------
+            // ORDINARY APPLICATION PROCESSING
+            // ---------------------------------------------
+
+            /*
+             * IMPORTANT:
+             *
+             * We DO NOT require a registered peer here.
+             *
+             * Shell clients, external application clients,
+             * and other permitted incoming requests
+             * continue through the original processing path.
+             *
+             * Being unregistered as an EC peer must not
+             * cause the application processor to close
+             * an ordinary client's socket.
+             *
+             * Authorization for sensitive operations
+             * remains the responsibility of the
+             * appropriate application/security handler.
+             */
+
+            log.debug(() ->
+                    "[TCPApplicationProcessor][processIncoming] "
+                            + "Preparing request dispatch"
+                            + " | correlationId="
+                            + incomingMessage.getCorrelationId()
+                            + " | operation="
+                            + incomingMessage.getOperation()
+                            + " | messageType="
+                            + incomingMessage.getMessageType()
+            );
 
             /*
              * Dispatch the request to the internal message system.
@@ -288,13 +325,6 @@ public class TCPApplicationProcessor implements TCPProcessor {
              * A TCPReplyChannel is provided so downstream services
              * can send their responses to the original client.
              */
-            log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] Preparing request dispatch"
-                            + " | correlationId=" + incomingMessage.getCorrelationId()
-                            + " | operation=" + incomingMessage.getOperation()
-                            + " | messageType=" + incomingMessage.getMessageType()
-            );
-
             TCPReplyChannel replyChannel =
                     new TCPReplyChannel(
                             this,
@@ -302,8 +332,10 @@ public class TCPApplicationProcessor implements TCPProcessor {
                     );
 
             log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] TCP reply channel initialized"
-                            + " | correlationId=" + incomingMessage.getCorrelationId()
+                    "[TCPApplicationProcessor][processIncoming] "
+                            + "TCP reply channel initialized"
+                            + " | correlationId="
+                            + incomingMessage.getCorrelationId()
             );
 
             messageDispatcher.dispatchRequest(
@@ -312,9 +344,12 @@ public class TCPApplicationProcessor implements TCPProcessor {
             );
 
             log.debug(() ->
-                    "[TCPApplicationProcessor][processIncoming] Request dispatched successfully"
-                            + " | correlationId=" + incomingMessage.getCorrelationId()
-                            + " | operation=" + incomingMessage.getOperation()
+                    "[TCPApplicationProcessor][processIncoming] "
+                            + "Request dispatched successfully"
+                            + " | correlationId="
+                            + incomingMessage.getCorrelationId()
+                            + " | operation="
+                            + incomingMessage.getOperation()
             );
 
         } catch (RuntimeException exception) {
@@ -327,62 +362,239 @@ public class TCPApplicationProcessor implements TCPProcessor {
              * mechanism remains responsible for recovery.
              */
             log.error(
-                    "[TCPApplicationProcessor][processIncoming] Incoming TCP message processing failed"
-                            + " | exception=" + exception.getClass().getSimpleName()
+                    "[TCPApplicationProcessor][processIncoming] "
+                            + "Incoming TCP message processing failed"
+                            + " | exception="
+                            + exception.getClass().getSimpleName(),
+                    exception
             );
 
             throw exception;
         }
     }
 
-    @Override
-    public void onConnectionClosed(ClientConnection connection) {
-        connection.getSessionContext().close();
-        if (messageDispatcher instanceof org.prats.services.messageService.MessageService service) service.releaseConnection(connection);
-        if (guiIngressEnabled) {
-            Message logout = messageParser.createEmptyMessage();
-            logout.setMessageType(MessageType.REQUEST);
-            logout.setOperation(Operation.AUTHENTICATE);
-            logout.setPayload(messageParser.convertToJsonNode(Map.of("action", "disconnect")));
-            logout.setClientSession(connection.getSessionContext());
-            messageDispatcher.dispatchRequest(logout, response -> java.util.concurrent.CompletableFuture.completedFuture(null));
-        } else connection.getSessionContext().clear();
-        org.prats.definitions.interfaces.TCPProcessor.super.onConnectionClosed(connection);
+    // ---------------------------------------------------------
+    // DIRECT HANDSHAKE MESSAGE WRITE
+    // ---------------------------------------------------------
+
+    /*
+     * Handshake messages must be sent over the exact
+     * socket being established.
+     *
+     * We cannot use a registered-peer lookup here
+     * because the handshake has not completed yet.
+     *
+     * This method is supplied to TCPHandshakeManager
+     * as its message-sending callback.
+     */
+    private CompletionStage<Void> writeHandshakeMessage(
+            Message message,
+            ClientConnection connection
+    ) {
+
+        Objects.requireNonNull(
+                message,
+                "Handshake message cannot be null"
+        );
+
+        Objects.requireNonNull(
+                connection,
+                "Handshake connection cannot be null"
+        );
+
+        TCPService service = tcpService;
+
+        if (service == null) {
+
+            log.error(
+                    "[TCPApplicationProcessor][writeHandshakeMessage] "
+                            + "TCP service has not been initialized"
+            );
+
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                            "TCP service has not been initialized"
+                    )
+            );
+        }
+
+        log.debug(() ->
+                "[TCPApplicationProcessor][writeHandshakeMessage] "
+                        + "Sending application handshake message"
+                        + " | messageType="
+                        + message.getMessageType()
+                        + " | operation="
+                        + message.getOperation()
+                        + " | correlationId="
+                        + message.getCorrelationId()
+        );
+
+        try {
+
+            /*
+             * Handshake messages must retain their
+             * complete JSON envelope.
+             */
+            CompletionStage<Void> writeStage =
+                    service.writeMessage(
+                            serialize(message),
+                            connection
+                    );
+
+            return writeStage.whenComplete(
+                    (ignored, exception) -> {
+
+                        if (exception != null) {
+
+                            log.error(
+                                    "[TCPApplicationProcessor][writeHandshakeMessage] "
+                                            + "Handshake message delivery failed"
+                                            + " | correlationId="
+                                            + message.getCorrelationId(),
+                                    exception
+                            );
+
+                        } else {
+
+                            log.debug(() ->
+                                    "[TCPApplicationProcessor][writeHandshakeMessage] "
+                                            + "Handshake message submitted"
+                                            + " | messageType="
+                                            + message.getMessageType()
+                            );
+                        }
+                    }
+            );
+
+        } catch (RuntimeException exception) {
+
+            log.error(
+                    "[TCPApplicationProcessor][writeHandshakeMessage] "
+                            + "Unable to submit handshake message",
+                    exception
+            );
+
+            return CompletableFuture.failedFuture(exception);
+        }
     }
 
-    private void dispatchIncoming(Message request, ClientConnection connection) {
-        messageDispatcher.dispatchRequest(request, new TCPReplyChannel(this, connection));
+    // ---------------------------------------------------------
+    // CONNECTION CLOSED
+    // ---------------------------------------------------------
+
+    @Override
+    public void onConnectionClosed(
+            ClientConnection connection
+    ) {
+
+        log.debug(
+                "[TCPApplicationProcessor][onConnectionClosed] "
+                        + "Connection closure notification received"
+        );
+
+        /*
+         * Remove any registered EC peer or pending
+         * handshake associated with this connection.
+         *
+         * Ordinary client connections will not have
+         * entries in the handshake manager.
+         */
+        handshakeManager.onConnectionClosed(
+                connection
+        );
+
+        /*
+         * Preserve existing MessageService connection
+         * release behavior.
+         */
+        if (messageDispatcher instanceof MessageService service) {
+
+            service.releaseConnection(connection);
+        }
+
+        TCPProcessor.super.onConnectionClosed(connection);
     }
+
+    // ---------------------------------------------------------
+    // INTERNAL REQUEST DISPATCH
+    // ---------------------------------------------------------
+
+    private void dispatchIncoming(
+            Message request,
+            ClientConnection connection
+    ) {
+
+        messageDispatcher.dispatchRequest(
+                request,
+                new TCPReplyChannel(this, connection)
+        );
+    }
+
+    // ---------------------------------------------------------
+    // OUTGOING APPLICATION MESSAGE PROCESSING
+    // ---------------------------------------------------------
 
     public CompletionStage<Void> processOutgoing(
             Message outgoing,
             ClientConnection clientConnection
     ) {
 
-        log.debug(() ->
-                "[TCPApplicationProcessor][processOutgoing] Preparing outgoing TCP message"
-                        + " | operation=" + outgoing.getOperation()
-                        + " | responseComplete=" + outgoing.isResponseComplete()
-                        + " | clientConnectionPresent=" + (clientConnection != null)
+        Objects.requireNonNull(
+                outgoing,
+                "Outgoing message cannot be null"
         );
+
+        Objects.requireNonNull(
+                clientConnection,
+                "Client connection cannot be null"
+        );
+
+        log.debug(() ->
+                "[TCPApplicationProcessor][processOutgoing] "
+                        + "Preparing outgoing TCP message"
+                        + " | operation="
+                        + outgoing.getOperation()
+                        + " | responseComplete="
+                        + outgoing.isResponseComplete()
+                        + " | clientConnectionPresent=true"
+        );
+
+        /*
+         * Preserve the original outgoing response behavior.
+         *
+         * We do not require handshake registration here
+         * because ordinary clients must still receive
+         * responses over their existing TCP connection.
+         */
+
+        // ---------------------------------------------
+        // COMMAND RESPONSE PROCESSING
+        // ---------------------------------------------
 
         if (outgoing.getOperation() == Operation.COMMAND) {
 
             log.debug(
-                    "[TCPApplicationProcessor][processOutgoing] COMMAND operation detected; extracting response body"
+                    "[TCPApplicationProcessor][processOutgoing] "
+                            + "COMMAND operation detected; extracting response body"
             );
 
             try {
-                String commandBody = messageParser.extractPayloadField(
-                        outgoing,
-                        "body",
-                        String.class
-                );
+
+                String commandBody =
+                        outgoing.hasError()
+                                ? outgoing.getError().getErrorMessage()
+                                : messageParser.fromPayload(
+                                outgoing.getPayload(),
+                                CommandResponse.class
+                        ).body();
 
                 log.debug(() ->
-                        "[TCPApplicationProcessor][processOutgoing] COMMAND body extracted"
+                        "[TCPApplicationProcessor][processOutgoing] "
+                                + "COMMAND body extracted"
                                 + " | bodyLength="
-                                + (commandBody == null ? 0 : commandBody.length())
+                                + (commandBody == null
+                                ? 0
+                                : commandBody.length())
                 );
 
                 return tcpService.writeMessage(
@@ -390,18 +602,25 @@ public class TCPApplicationProcessor implements TCPProcessor {
                         clientConnection
                 );
 
-            } catch (JsonProcessingException jsonProcessingException) {
+            } catch (JsonProcessingException exception) {
 
                 log.error(
-                        "[TCPApplicationProcessor][processOutgoing] Unable to extract COMMAND response body",
-                        jsonProcessingException
+                        "[TCPApplicationProcessor][processOutgoing] "
+                                + "Unable to extract COMMAND response body",
+                        exception
                 );
             }
         }
 
+        // ---------------------------------------------
+        // NORMAL APPLICATION MESSAGE
+        // ---------------------------------------------
+
         log.debug(() ->
-                "[TCPApplicationProcessor][processOutgoing] Serializing outgoing message"
-                        + " | operation=" + outgoing.getOperation()
+                "[TCPApplicationProcessor][processOutgoing] "
+                        + "Serializing outgoing message"
+                        + " | operation="
+                        + outgoing.getOperation()
         );
 
         return tcpService.writeMessage(
@@ -410,54 +629,124 @@ public class TCPApplicationProcessor implements TCPProcessor {
         );
     }
 
+    // ---------------------------------------------------------
+    // PROCESSOR SHUTDOWN
+    // ---------------------------------------------------------
+
     @Override
     public void informShutdown() {
-        log.debug(
-                "[TCPApplicationProcessor][informShutdown] Shutdown notification received; no action required"
+
+        log.info(() ->
+                "[TCPApplicationProcessor][informShutdown] "
+                        + "Application processor shutdown initiated"
+                        + " | activePeers="
+                        + handshakeManager.getActivePeerCount()
+                        + " | pendingHandshakes="
+                        + handshakeManager.getPendingHandshakeCount()
         );
-// not required
+
+        /*
+         * Close registered EC peer connections and
+         * incomplete handshake connections.
+         *
+         * Ordinary incoming clients remain owned
+         * by TCPService's connection lifecycle.
+         */
+        handshakeManager.shutdown();
+
+        log.info(
+                "[TCPApplicationProcessor][informShutdown] "
+                        + "Application processor shutdown completed"
+        );
     }
+
+    // ---------------------------------------------------------
+    // HANDSHAKE CLEANUP
+    // ---------------------------------------------------------
 
     @Override
     public void cleanupCorrelations() {
+
+        /*
+         * The original application processor did not
+         * own a TCP correlation registry.
+         *
+         * However, now that it initiates EC handshakes,
+         * expired pending handshakes must be removed.
+         */
         log.debug(
-                "[TCPApplicationProcessor][cleanupCorrelations] Correlation cleanup invoked; no action required"
-        );
-// not required
-    }
-
-    private static String normalizePeerId(String peerId) {
-
-        if (peerId == null || peerId.isBlank()) {
-            log.debug(
-                    "[TCPApplicationProcessor][normalizePeerId] Empty peer ID supplied"
-            );
-
-            return null;
-        }
-
-        String normalizedPeerId = peerId.trim().toUpperCase(Locale.ROOT);
-
-        log.debug(() ->
-                "[TCPApplicationProcessor][normalizePeerId] Peer ID normalized"
-                        + " | normalizedPeerId=" + normalizedPeerId
+                "[TCPApplicationProcessor][cleanupCorrelations] "
+                        + "Application handshake cleanup started"
         );
 
-        return normalizedPeerId;
+        handshakeManager.cleanupExpiredHandshakes();
+
+        log.debug(
+                "[TCPApplicationProcessor][cleanupCorrelations] "
+                        + "Application handshake cleanup completed"
+        );
     }
+
+    // ---------------------------------------------------------
+    // PEER ID NORMALIZATION
+    // ---------------------------------------------------------
+
+    private static String normalizePeerId(
+            String peerId
+    ) {
+
+        return TCPHandshakeManager.normalizePeerId(
+                peerId
+        );
+    }
+
+    // ---------------------------------------------------------
+    // CONNECTION OWNERSHIP
+    // ---------------------------------------------------------
 
     private boolean shouldInitiateConnection(
             String localProcessId,
             String remoteProcessId
     ) {
 
-        String local = normalizePeerId(localProcessId);
-        String remote = normalizePeerId(remoteProcessId);
+        String local =
+                normalizePeerId(localProcessId);
 
-        boolean shouldInitiate = local.compareTo(remote) < 0;
+        String remote =
+                normalizePeerId(remoteProcessId);
+
+        if (local == null || remote == null) {
+
+            log.warn(
+                    "[TCPApplicationProcessor][shouldInitiateConnection] "
+                            + "Cannot evaluate connection ownership because process ID is missing"
+            );
+
+            return false;
+        }
+
+        /*
+         * Preserve the original deterministic rule.
+         *
+         * Only one of the ECs initiates the application
+         * TCP connection.
+         *
+         * Example:
+         *
+         * EC01 < EC02
+         *
+         * EC01 initiates the connection to EC02.
+         * EC02 accepts the connection.
+         *
+         * Both sides then register their peer
+         * through the handshake protocol.
+         */
+        boolean shouldInitiate =
+                local.compareTo(remote) < 0;
 
         log.debug(() ->
-                "[TCPApplicationProcessor][shouldInitiateConnection] Peer connection ownership evaluated"
+                "[TCPApplicationProcessor][shouldInitiateConnection] "
+                        + "Peer connection ownership evaluated"
                         + " | localProcessId=" + local
                         + " | remoteProcessId=" + remote
                         + " | shouldInitiate=" + shouldInitiate
@@ -466,151 +755,305 @@ public class TCPApplicationProcessor implements TCPProcessor {
         return shouldInitiate;
     }
 
+    // ---------------------------------------------------------
+    // PEER RECONCILIATION
+    // ---------------------------------------------------------
 
     @Override
     public synchronized void reconcilePeers() {
 
         log.debug(() ->
-                "[TCPApplicationProcessor][reconcilePeers] Starting peer reconciliation"
+                "[TCPApplicationProcessor][reconcilePeers] "
+                        + "Starting peer reconciliation"
                         + " | connectionMode=" + connectionMode
                         + " | configuredPeers="
-                        + (configuredApplicationPeers == null ? 0 : configuredApplicationPeers.size())
-                        + " | activePeerConnections=" + activePeerConnections.size()
+                        + configuredApplicationPeers.size()
+                        + " | activePeers="
+                        + handshakeManager.getActivePeerCount()
+                        + " | pendingHandshakes="
+                        + handshakeManager.getPendingHandshakeCount()
         );
 
         if (connectionMode == TCPConnectionMode.SERVER_ONLY) {
 
             log.debug(
-                    "[TCPApplicationProcessor][reconcilePeers] Peer reconciliation skipped because connection mode is SERVER_ONLY"
+                    "[TCPApplicationProcessor][reconcilePeers] "
+                            + "Peer reconciliation skipped because connection mode is SERVER_ONLY"
             );
 
             return;
         }
 
+        TCPService service = tcpService;
+
+        if (service == null) {
+
+            log.error(
+                    "[TCPApplicationProcessor][reconcilePeers] "
+                            + "TCP service has not been initialized"
+            );
+
+            return;
+        }
+
+        /*
+         * Cleanup incomplete outgoing handshakes
+         * before attempting further connections.
+         */
+        handshakeManager.cleanupExpiredHandshakes();
+
+        // ---------------------------------------------
+        // RECONCILE CONFIGURED EC PEERS
+        // ---------------------------------------------
+
         for (TCPPeer tcpPeer : configuredApplicationPeers) {
 
             if (tcpPeer == null) {
+
                 log.debug(
-                        "[TCPApplicationProcessor][reconcilePeers] Skipping null peer configuration"
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Skipping null peer configuration"
+                );
+
+                continue;
+            }
+
+            String peerId =
+                    normalizePeerId(
+                            tcpPeer.processId()
+                    );
+
+            if (peerId == null) {
+
+                log.warn(
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Skipping peer with invalid process ID"
                 );
 
                 continue;
             }
 
             log.debug(() ->
-                    "[TCPApplicationProcessor][reconcilePeers] Evaluating configured peer"
-                            + " | peerProcessId=" + tcpPeer.processId()
-                            + " | peerHost=" + tcpPeer.host()
-                            + " | peerPort=" + tcpPeer.port()
+                    "[TCPApplicationProcessor][reconcilePeers] "
+                            + "Evaluating configured peer"
+                            + " | peerProcessId=" + peerId
+                            + " | peerHost="
+                            + tcpPeer.host()
+                            + " | peerPort="
+                            + tcpPeer.port()
             );
 
-            if (!shouldInitiateConnection(ProcessContext.getProcessName(), tcpPeer.processId())) {
+            // ---------------------------------------------
+            // CONNECTION INITIATION OWNERSHIP
+            // ---------------------------------------------
+
+            if (!shouldInitiateConnection(
+                    ProcessContext.getProcessName(),
+                    peerId
+            )) {
 
                 log.debug(() ->
-                        "[TCPApplicationProcessor][reconcilePeers] Skipping peer because this process does not own connection initiation"
-                                + " | localProcessId=" + ProcessContext.getProcessName()
-                                + " | peerProcessId=" + tcpPeer.processId()
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Skipping peer because this process does not own connection initiation"
+                                + " | localProcessId="
+                                + ProcessContext.getProcessName()
+                                + " | peerProcessId=" + peerId
                 );
 
                 continue;
             }
 
+            // ---------------------------------------------
+            // CHECK ACTIVE PEER CONNECTION
+            // ---------------------------------------------
+
+            /*
+             * A peer is active only after the handshake
+             * manager registers its connection.
+             *
+             * TCP connection establishment alone
+             * does not populate the active peer registry.
+             */
             ClientConnection existingConnection =
-                    activePeerConnections.get(tcpPeer.processId());
+                    handshakeManager.getActiveConnection(
+                            peerId
+                    );
 
-            if (isConnectionUsable(existingConnection)) {
+            if (TCPHandshakeManager.isConnectionUsable(
+                    existingConnection
+            )) {
 
                 log.debug(() ->
-                        "[TCPApplicationProcessor][reconcilePeers] Peer already has a usable connection"
-                                + " | peerProcessId=" + tcpPeer.processId()
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Peer already has a usable registered connection"
+                                + " | peerProcessId=" + peerId
                 );
 
                 continue;
             }
+
+            // ---------------------------------------------
+            // REMOVE STALE REGISTERED PEER
+            // ---------------------------------------------
 
             if (existingConnection != null) {
-                activePeerConnections.remove(
-                        tcpPeer.processId(),
-                        existingConnection
+
+                log.warn(() ->
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Removing stale registered peer connection"
+                                + " | peerProcessId=" + peerId
                 );
-                try {
-                    existingConnection.getSocket().close();
-                } catch (IOException exception) {
-                    log.warn(() ->
-                            "[TCPApplicationProcessor][reconcilePeers] Unable to close stale peer connection"
-                                    + " | peerProcessId=" + tcpPeer.processId()
-                                    + " | reason=" + exception.getMessage()
-                    );
-                }
+
+                handshakeManager.disconnect(peerId);
             }
 
+            // ---------------------------------------------
+            // CHECK PENDING HANDSHAKE
+            // ---------------------------------------------
+
+            /*
+             * Do not open another connection while
+             * the previous connection is waiting
+             * for its handshake response.
+             */
+            if (handshakeManager.hasPendingHandshake(peerId)) {
+
+                log.debug(() ->
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Skipping peer because handshake is pending"
+                                + " | peerProcessId=" + peerId
+                );
+
+                continue;
+            }
+
+            // ---------------------------------------------
+            // ESTABLISH TCP CONNECTION
+            // ---------------------------------------------
+
             log.debug(() ->
-                    "[TCPApplicationProcessor][reconcilePeers] Attempting peer connection"
-                            + " | peerProcessId=" + tcpPeer.processId()
+                    "[TCPApplicationProcessor][reconcilePeers] "
+                            + "Attempting application peer connection"
+                            + " | peerProcessId=" + peerId
                             + " | host=" + tcpPeer.host()
                             + " | port=" + tcpPeer.port()
             );
 
-            ClientConnection connection = tcpService.attemptConnection(tcpPeer);
+            ClientConnection connection;
 
-            if (connection != null) {
+            try {
 
-                activePeerConnections.put(
-                        tcpPeer.processId(),
-                        connection
+                connection =
+                        service.attemptConnection(
+                                tcpPeer
+                        );
+
+            } catch (Exception exception) {
+
+                log.error(
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Peer connection attempt failed"
+                                + " | peerProcessId=" + peerId,
+                        exception
                 );
 
-                log.info(() ->
-                        "[TCPApplicationProcessor][reconcilePeers] Peer connection established"
-                                + " | peerProcessId=" + tcpPeer.processId()
-                                + " | activePeerConnections=" + activePeerConnections.size()
-                );
+                continue;
+            }
 
-            } else {
+            if (connection == null) {
 
                 log.warn(() ->
-                        "[TCPApplicationProcessor][reconcilePeers] Peer connection attempt failed; it will be retried during the next reconciliation"
-                                + " | peerProcessId=" + tcpPeer.processId()
+                        "[TCPApplicationProcessor][reconcilePeers] "
+                                + "Peer connection attempt failed; retry during next reconciliation"
+                                + " | peerProcessId=" + peerId
                                 + " | host=" + tcpPeer.host()
                                 + " | port=" + tcpPeer.port()
                 );
+
+                continue;
             }
+
+            // ---------------------------------------------
+            // INITIATE EC HANDSHAKE
+            // ---------------------------------------------
+
+            /*
+             * IMPORTANT:
+             *
+             * Do not insert this connection directly
+             * into the active peer registry.
+             *
+             * TCPHandshakeManager will register it
+             * after receiving Accepted from the
+             * expected peer on the same connection.
+             *
+             * Note that initiateHandshake() completes
+             * when the handshake REQUEST is submitted.
+             * It does not wait for handshake acceptance.
+             */
+            handshakeManager.initiateHandshake(
+                    peerId,
+                    connection
+            ).whenComplete((ignored, exception) -> {
+
+                if (exception != null) {
+
+                    log.error(
+                            "[TCPApplicationProcessor][reconcilePeers] "
+                                    + "Unable to initiate application peer handshake"
+                                    + " | peerProcessId=" + peerId,
+                            exception
+                    );
+
+                } else {
+
+                    log.debug(() ->
+                            "[TCPApplicationProcessor][reconcilePeers] "
+                                    + "Handshake request submitted; awaiting peer response"
+                                    + " | peerProcessId=" + peerId
+                                    + " | pendingHandshakes="
+                                    + handshakeManager.getPendingHandshakeCount()
+                    );
+                }
+            });
         }
 
         log.debug(() ->
-                "[TCPApplicationProcessor][reconcilePeers] Peer reconciliation completed"
-                        + " | activePeerConnections=" + activePeerConnections.size()
+                "[TCPApplicationProcessor][reconcilePeers] "
+                        + "Peer reconciliation completed"
+                        + " | activePeers="
+                        + handshakeManager.getActivePeerCount()
+                        + " | pendingHandshakes="
+                        + handshakeManager.getPendingHandshakeCount()
         );
     }
 
-    private boolean isConnectionUsable(ClientConnection connection) {
-        if (connection == null) {
-            return false;
-        }
-
-        try {
-            return connection.getSocket() != null
-                    && connection.getSocket().isConnected()
-                    && !connection.getSocket().isClosed()
-                    && !connection.getSocket().isInputShutdown()
-                    && !connection.getSocket().isOutputShutdown();
-        } catch (RuntimeException exception) {
-            return false;
-        }
-    }
+    // ---------------------------------------------------------
+    // SERIALIZATION
+    // ---------------------------------------------------------
 
     @Override
-    public String serialize(Message message) {
+    public String serialize(
+            Message message
+    ) {
 
-        String serializedMessage = messageParser.createJSONFromMessage(
-                message
-        );
+        String serializedMessage =
+                messageParser.createJSONFromMessage(
+                        Objects.requireNonNull(
+                                message,
+                                "Message cannot be null"
+                        )
+                );
 
         log.debug(() ->
-                "[TCPApplicationProcessor][serialize] Message serialized"
+                "[TCPApplicationProcessor][serialize] "
+                        + "Message serialized"
                         + " | operation=" + message.getOperation()
+                        + " | messageType=" + message.getMessageType()
                         + " | serializedLength="
-                        + (serializedMessage == null ? 0 : serializedMessage.length())
+                        + (serializedMessage == null
+                        ? 0
+                        : serializedMessage.length())
         );
 
         return serializedMessage;

@@ -19,7 +19,6 @@ import org.prats.forwarders.DatabaseForwarder;
 import org.prats.handlers.DatabaseRequestHandler;
 import org.prats.handlers.ECControlHandler;
 import org.prats.handlers.ExecutionContainerCommandHandler;
-import org.prats.handlers.JVMDiagnosticsHandler;
 
 import org.prats.loggers.EngineLogger;
 
@@ -968,8 +967,8 @@ public class ExecutionContainerInitializer {
                         + " | peerCount=" + controlPeers.size()
         );
 
-        TCPControlProcessor tcpControlProcessor =
-                new TCPControlProcessor(
+        TCPProtocolProcessor tcpProtocolProcessor =
+                new TCPProtocolProcessor(
                         TCPConnectionMode.CLIENT_ONLY,
                         controlPeers,
                         messageParser
@@ -1030,7 +1029,7 @@ public class ExecutionContainerInitializer {
                         controlPort,
                         tcpBacklog,
                         false,
-                        tcpControlProcessor
+                        tcpProtocolProcessor
                 );
 
         log.info(() ->
@@ -1069,61 +1068,13 @@ public class ExecutionContainerInitializer {
         executionContainerService.setMessageDispatcher(messageService);
 
         executionContainerService.setControlChannelCommunicator(
-                tcpControlProcessor
+                tcpProtocolProcessor
         );
 
         ecControlHandler.setControlChannelCommunicator(
-                tcpControlProcessor
+                tcpProtocolProcessor
         );
 
-
-        // -----------------------------------------------------
-        // 4.14. Initialize JVM diagnostics
-        // -----------------------------------------------------
-
-        log.debug(
-                "[ExecutionContainerInitializer] Initializing JVM diagnostics handler"
-        );
-
-        JVMDiagnosticsHandler diagnostics =
-                new JVMDiagnosticsHandler(
-                        messageParser,
-
-                        () -> serviceRegistry.getAllServices()
-                                .stream()
-                                .filter(TCPService.class::isInstance)
-                                .map(TCPService.class::cast)
-                                .toList(),
-
-                        () -> healthService
-                                .getConsolidatedHealthReport()
-                                .overallStatus()
-                );
-
-        diagnostics.setRegistryMetrics(() ->
-                Map.of(
-                        "correlations",
-                        correlationRegistry.getSize(),
-
-                        "correlationLimit",
-                        correlationRegistry.capacity(),
-
-                        "correlationRejections",
-                        correlationRegistry.rejectedCount()
-                )
-        );
-
-        diagnostics.setServiceMetrics(() ->
-                healthService
-                        .getConsolidatedHealthReport()
-                        .services()
-        );
-
-        ecControlHandler.setDiagnostics(diagnostics);
-
-        log.debug(
-                "[ExecutionContainerInitializer] JVM diagnostics handler initialized and injected"
-        );
 
 
         // -----------------------------------------------------
@@ -1134,11 +1085,11 @@ public class ExecutionContainerInitializer {
                 executionContainerService
         );
 
-        tcpControlProcessor.setTcpService(
+        tcpProtocolProcessor.setTcpService(
                 controlTcpService
         );
 
-        tcpControlProcessor.setControlMessageHandler(
+        tcpProtocolProcessor.setControlMessageHandler(
                 executionContainerService
         );
 
