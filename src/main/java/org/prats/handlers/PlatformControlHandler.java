@@ -1,13 +1,14 @@
 package org.prats.handlers;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.enums.MessageType;
 import org.prats.definitions.enums.Operation;
 import org.prats.definitions.interfaces.ControlChannelCommunicator;
 import org.prats.definitions.interfaces.MessageDispatcher;
 import org.prats.definitions.records.ConsolidatedWatchdogConfig;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 import org.prats.parsers.CommandParser;
 import org.prats.replyChannels.FutureReplyChannel;
 
@@ -18,6 +19,9 @@ import java.util.concurrent.ExecutionException;
 
 public class PlatformControlHandler {
 
+    private static final EngineLogger log =
+            EngineLogger.getLogger(PlatformControlHandler.class);
+
     private ControlChannelCommunicator controlChannelCommunicator;
     private MessageDispatcher messageDispatcher;
     private final CommandParser commandParser;
@@ -27,20 +31,50 @@ public class PlatformControlHandler {
             CommandParser commandParser,
             Map<String, ConsolidatedWatchdogConfig> ecWatchdogMap
     ) {
-        this.commandParser              = commandParser;
-        this.ecWatchdogMap              = ecWatchdogMap;
+        this.commandParser = commandParser;
+        this.ecWatchdogMap = ecWatchdogMap;
+
+        log.info(() ->
+                "[PlatformControlHandler][constructor] Platform control handler initialized"
+                        + " | configuredECs=" + ecWatchdogMap.size()
+        );
     }
 
     public void setControlChannelCommunicator(ControlChannelCommunicator controlChannelCommunicator) {
         this.controlChannelCommunicator = controlChannelCommunicator;
+
+        log.debug(() ->
+                "[PlatformControlHandler][setControlChannelCommunicator] Control channel communicator configured"
+                        + " | communicatorType="
+                        + (controlChannelCommunicator == null
+                        ? "null"
+                        : controlChannelCommunicator.getClass().getSimpleName())
+        );
     }
 
     public void setMessageDispatcher(MessageDispatcher messageDispatcher) {
-        this.messageDispatcher      = messageDispatcher;
+        this.messageDispatcher = messageDispatcher;
+
+        log.debug(() ->
+                "[PlatformControlHandler][setMessageDispatcher] Message dispatcher configured"
+                        + " | dispatcherType="
+                        + (messageDispatcher == null
+                        ? "null"
+                        : messageDispatcher.getClass().getSimpleName())
+        );
     }
 
     private ConsolidatedWatchdogConfig getWatchdog(String ecName) {
-        return ecWatchdogMap.get(ecName);
+
+        ConsolidatedWatchdogConfig watchdog = ecWatchdogMap.get(ecName);
+
+        log.debug(() ->
+                "[PlatformControlHandler][getWatchdog] WATCHDOG configuration lookup completed"
+                        + " | ecName=" + ecName
+                        + " | watchdogFound=" + (watchdog != null)
+        );
+
+        return watchdog;
     }
 
     private Throwable unwrapCompletionError(Throwable error) {
@@ -63,6 +97,14 @@ public class PlatformControlHandler {
             String acknowledgementText,
             String action
     ) {
+
+        log.info(() ->
+                "[PlatformControlHandler][dispatchECOperation] Initiating EC lifecycle operation"
+                        + " | action=" + action
+                        + " | ecName=" + ecName
+                        + " | operation=" + operation
+                        + " | correlationId=" + command.getCorrelationId()
+        );
 
         Message acknowledgement = commandParser.createCommandResponse(
                 command,
@@ -120,6 +162,14 @@ public class PlatformControlHandler {
 
         try {
 
+            log.debug(() ->
+                    "[PlatformControlHandler][dispatchECOperation] Dispatching lifecycle request to WATCHDOG"
+                            + " | action=" + action
+                            + " | ecName=" + ecName
+                            + " | watchdogId=" + watchdog.id()
+                            + " | correlationId=" + command.getCorrelationId()
+            );
+
             controlChannelCommunicator.sendRequest(
                     controlRequest,
                     watchdogReplyChannel
@@ -127,13 +177,37 @@ public class PlatformControlHandler {
 
                 if (sendError != null) {
 
-                    watchdogFuture.completeExceptionally(
-                            unwrapCompletionError(sendError)
+                    Throwable cause = unwrapCompletionError(sendError);
+
+                    log.error(
+                            "[PlatformControlHandler][dispatchECOperation] Unable to dispatch WATCHDOG control request"
+                                    + " | action=" + action
+                                    + " | ecName=" + ecName
+                                    + " | correlationId=" + command.getCorrelationId(),
+                            cause
+                    );
+
+                    watchdogFuture.completeExceptionally(cause);
+
+                } else {
+
+                    log.debug(() ->
+                            "[PlatformControlHandler][dispatchECOperation] WATCHDOG control request submitted successfully"
+                                    + " | action=" + action
+                                    + " | ecName=" + ecName
+                                    + " | correlationId=" + command.getCorrelationId()
                     );
                 }
             });
 
         } catch (Exception e) {
+
+            log.error(
+                    "[PlatformControlHandler][dispatchECOperation] Exception while submitting WATCHDOG control request"
+                            + " | action=" + action
+                            + " | ecName=" + ecName,
+                    e
+            );
 
             watchdogFuture.completeExceptionally(e);
         }
@@ -147,6 +221,13 @@ public class PlatformControlHandler {
             Operation operation,
             ConsolidatedWatchdogConfig watchdog
     ) {
+
+        log.debug(() ->
+                "[PlatformControlHandler][createECControlRequest] Creating EC control request"
+                        + " | ecName=" + ecName
+                        + " | operation=" + operation
+                        + " | correlationId=" + command.getCorrelationId()
+        );
 
         Message watchdogRequest = commandParser.createEmptyMessage();
 
@@ -163,6 +244,14 @@ public class PlatformControlHandler {
 
         controlRequest.setCorrelationId(command.getCorrelationId());
 
+        log.debug(() ->
+                "[PlatformControlHandler][createECControlRequest] EC control request created"
+                        + " | ecName=" + ecName
+                        + " | watchdogId=" + watchdog.id()
+                        + " | operation=" + operation
+                        + " | correlationId=" + controlRequest.getCorrelationId()
+        );
+
         return controlRequest;
     }
 
@@ -170,6 +259,11 @@ public class PlatformControlHandler {
             Message command,
             CompletableFuture<Message> watchdogFuture
     ) {
+
+        log.debug(() ->
+                "[PlatformControlHandler][createWatchdogReplyChannel] Creating WATCHDOG reply channel"
+                        + " | correlationId=" + command.getCorrelationId()
+        );
 
         return new FutureReplyChannel(
                 watchdogFuture,
@@ -182,9 +276,10 @@ public class PlatformControlHandler {
 
                     } catch (Exception e) {
 
-                        FileLogger.log(
-                                "[PlatformControlHandler] Progress dispatch failed: "
-                                        + e.getMessage()
+                        log.error(
+                                "[PlatformControlHandler][createWatchdogReplyChannel] Progress dispatch failed"
+                                        + " | correlationId=" + command.getCorrelationId(),
+                                e
                         );
 
                         return CompletableFuture.failedFuture(e);
@@ -198,12 +293,23 @@ public class PlatformControlHandler {
             Message progress
     ) {
 
+        log.debug(() ->
+                "[PlatformControlHandler][dispatchWatchdogProgress] WATCHDOG progress received"
+                        + " | correlationId=" + command.getCorrelationId()
+        );
+
         try {
 
             String status = commandParser.extractPayloadField(
                     progress,
                     "status",
                     String.class
+            );
+
+            log.debug(() ->
+                    "[PlatformControlHandler][dispatchWatchdogProgress] WATCHDOG progress status extracted"
+                            + " | ecCorrelationId=" + command.getCorrelationId()
+                            + " | status=" + status
             );
 
             Message progressResponse = commandParser.createCommandResponse(
@@ -216,10 +322,17 @@ public class PlatformControlHandler {
 
             messageDispatcher.dispatchResponse(progressResponse);
 
+            log.debug(() ->
+                    "[PlatformControlHandler][dispatchWatchdogProgress] Progress response dispatched to original command caller"
+                            + " | correlationId=" + command.getCorrelationId()
+                            + " | status=" + status
+            );
+
         } catch (JsonProcessingException e) {
 
-            FileLogger.log(
-                    "Unable to parse WATCHDOG progress: " + e.getMessage()
+            log.error(
+                    "[PlatformControlHandler][dispatchWatchdogProgress] Unable to parse WATCHDOG progress",
+                    e
             );
 
             Message errorResponse = commandParser.createCommandResponse(
@@ -234,6 +347,13 @@ public class PlatformControlHandler {
         }
     }
 
+    String watchdogResponseText(Message response) throws JsonProcessingException {
+        // Failed lifecycle operations carry errorDescription rather than status.
+        String field = "FAILED".equals(response.getStatus())
+                ? "errorDescription" : "status";
+        return commandParser.extractPayloadField(response, field, String.class);
+    }
+
     private void completeWatchdogOperation(
             Message command,
             CompletableFuture<Message> watchdogFuture,
@@ -243,6 +363,12 @@ public class PlatformControlHandler {
         trace(
                 "STEPPED IN completeWatchdogOperation",
                 command
+        );
+
+        log.debug(() ->
+                "[PlatformControlHandler][completeWatchdogOperation] WATCHDOG completion handler registered"
+                        + " | action=" + action
+                        + " | correlationId=" + command.getCorrelationId()
         );
 
         watchdogFuture.whenComplete((response, error) -> {
@@ -258,6 +384,13 @@ public class PlatformControlHandler {
                         : cause.getMessage() != null
                         ? cause.getMessage()
                         : cause.getClass().getSimpleName();
+
+                log.error(
+                        "[PlatformControlHandler][completeWatchdogOperation] WATCHDOG operation failed"
+                                + " | action=" + action
+                                + " | correlationId=" + command.getCorrelationId(),
+                        cause == null ? error : cause
+                );
 
                 finalResponse = commandParser.createCommandResponse(
                         command,
@@ -276,11 +409,7 @@ public class PlatformControlHandler {
                         );
                     }
 
-                    String status = commandParser.extractPayloadField(
-                            response,
-                            "status",
-                            String.class
-                    );
+                    String status = watchdogResponseText(response);
 
                     if (status == null || status.isBlank()) {
 
@@ -289,6 +418,13 @@ public class PlatformControlHandler {
                         );
                     }
 
+                    log.info(() ->
+                            "[PlatformControlHandler][completeWatchdogOperation] WATCHDOG operation completed"
+                                    + " | action=" + action
+                                    + " | correlationId=" + command.getCorrelationId()
+                                    + " | status=" + status
+                    );
+
                     finalResponse = commandParser.createCommandResponse(
                             command,
                             status
@@ -296,11 +432,9 @@ public class PlatformControlHandler {
 
                 } catch (JsonProcessingException | RuntimeException e) {
 
-                    FileLogger.log(
-                            "Unable to process WATCHDOG final response: "
-                                    + e.getClass().getSimpleName()
-                                    + ": "
-                                    + e.getMessage()
+                    log.error(
+                            "[PlatformControlHandler][completeWatchdogOperation] Unable to process WATCHDOG final response",
+                            e
                     );
 
                     finalResponse = commandParser.createCommandResponse(
@@ -310,10 +444,19 @@ public class PlatformControlHandler {
                 }
             }
 
-            finalResponse.setCorrelationId(command.getCorrelationId());
-            finalResponse.setResponseComplete(true);
+            final Message completedResponse = finalResponse;
 
-            messageDispatcher.dispatchResponse(finalResponse);
+            completedResponse.setCorrelationId(command.getCorrelationId());
+            completedResponse.setResponseComplete(true);
+
+            log.debug(() ->
+                    "[PlatformControlHandler][completeWatchdogOperation] Dispatching final EC lifecycle response"
+                            + " | action=" + action
+                            + " | correlationId=" + command.getCorrelationId()
+                            + " | responseComplete=" + completedResponse.isResponseComplete()
+            );
+
+            messageDispatcher.dispatchResponse(completedResponse);
 
         });
     }
@@ -323,6 +466,12 @@ public class PlatformControlHandler {
         trace(
                 "STEPPED IN handleECStart",
                 command
+        );
+
+        log.info(() ->
+                "[PlatformControlHandler][handleECStart] EC start operation requested"
+                        + " | ecName=" + ecName
+                        + " | correlationId=" + command.getCorrelationId()
         );
 
         return dispatchECOperation(
@@ -337,6 +486,12 @@ public class PlatformControlHandler {
 
     public Message handleECStop(Message command, String ecName) {
 
+        log.info(() ->
+                "[PlatformControlHandler][handleECStop] EC stop operation requested"
+                        + " | ecName=" + ecName
+                        + " | correlationId=" + command.getCorrelationId()
+        );
+
         return dispatchECOperation(
                 command,
                 ecName,
@@ -348,6 +503,12 @@ public class PlatformControlHandler {
 
 
     public Message handleECRestart(Message command, String ecName) {
+
+        log.info(() ->
+                "[PlatformControlHandler][handleECRestart] EC restart operation requested"
+                        + " | ecName=" + ecName
+                        + " | correlationId=" + command.getCorrelationId()
+        );
 
         return dispatchECOperation(
                 command,
@@ -363,6 +524,13 @@ public class PlatformControlHandler {
             String key,
             String value
     ) {
+
+        log.debug(() ->
+                "[PlatformControlHandler][createControlMessage] Adding control payload field"
+                        + " | key=" + key
+                        + " | value=" + value
+        );
+
         return commandParser.putPayloadField(
                 controlMessage,
                 key,
@@ -372,7 +540,7 @@ public class PlatformControlHandler {
 
     private void trace(String stage, Message message) {
 
-        FileLogger.log(
+        log.debug(() ->
                 "[TRACE][PlatformControlHandler][" + stage + "]"
                         + " | correlationId="
                         + (message == null ? "null" : message.getCorrelationId())

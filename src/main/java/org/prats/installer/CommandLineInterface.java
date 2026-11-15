@@ -285,22 +285,22 @@ public class CommandLineInterface {
 
         switch (command) {
 
-            case "meng help" ->
+            case "mng help" ->
                     displayHelpMessage(filePath);
 
-            case "meng validate" ->
+            case "mng validate" ->
                     validateInstallation();
 
-            case "meng paths" ->
+            case "mng paths" ->
                     displayPaths();
 
-            case "meng start platform" ->
+            case "mng start platform" ->
                     startPlatform();
 
-            case "meng start watchdog" ->
+            case "mng start watchdog" ->
                     startWatchdog();
 
-            case "meng exit" ->
+            case "mng exit" ->
                     exitInstaller();
 
             case "" -> {
@@ -319,7 +319,7 @@ public class CommandLineInterface {
         );
 
         ShellLogger.log(
-                "Use 'meng help' to see available commands."
+                "Use 'mng help' to see available commands."
         );
     }
 
@@ -407,7 +407,7 @@ public class CommandLineInterface {
         displayWelcomeMessage(filePath);
 
         ShellLogger.log(
-                "Type 'meng help' to see installer commands."
+                "Type 'mng help' to see installer commands."
         );
 
         try (Scanner scanner = new Scanner(System.in)) {
@@ -416,7 +416,8 @@ public class CommandLineInterface {
 
                 String command = scanner.nextLine()
                         .trim()
-                        .replaceAll("\\s+", " ");
+                        .replaceAll("\\s+", " ")
+                        .toLowerCase(java.util.Locale.ROOT);
 
                 try {
 

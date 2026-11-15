@@ -8,7 +8,7 @@ Version 1.0
 
 Your environment is ready.
 
-Type 'meng help' to see available commands.
-Type 'meng exit' to close the shell.
+Type 'mng help' to see available commands.
+Type 'mng exit' to close the shell.
 
 ==================================================

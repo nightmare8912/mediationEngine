@@ -1,9 +1,8 @@
-
 package org.prats.processors;
 
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.classes.PendingDelivery;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 import org.prats.parsers.MessageParser;
 import org.prats.registries.CorrelationRegistry;
 import org.prats.registries.RetryRegistry;
@@ -16,6 +15,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 
 public class ResponseProcessor {
+
+    private static final EngineLogger log =
+            EngineLogger.getLogger(ResponseProcessor.class);
 
     private final CorrelationRegistry correlationRegistry;
     private final RetryRegistry retryRegistry;
@@ -30,12 +32,25 @@ public class ResponseProcessor {
         this.messageParser = Objects.requireNonNull(messageParser);
         this.correlationRegistry = Objects.requireNonNull(correlationRegistry);
         this.retryRegistry = Objects.requireNonNull(retryRegistry);
+
+        log.debug(
+                "[ResponseProcessor][constructor] Response processor initialized"
+        );
     }
 
     public void process(
             Message message,
             ReplyChannel replyChannel
     ) {
+
+        log.debug(() ->
+                "[ResponseProcessor][process] Initiating response delivery"
+                        + " | correlationId=" + message.getCorrelationId()
+                        + " | responseComplete=" + message.isResponseComplete()
+                        + " | replyChannel="
+                        + replyChannel.getClass().getSimpleName()
+        );
+
         attemptDelivery(message, replyChannel);
     }
 
@@ -44,14 +59,34 @@ public class ResponseProcessor {
 
         UUID correlationId = response.getCorrelationId();
 
+        log.debug(() ->
+                "[ResponseProcessor][process] Processing response using correlation registry"
+                        + " | correlationId=" + correlationId
+                        + " | responseComplete=" + response.isResponseComplete()
+        );
+
         ReplyChannel replyChannel;
 
         if (response.isResponseComplete()) {
+
+            log.debug(() ->
+                    "[ResponseProcessor][process] Final response received; removing correlation"
+                            + " | correlationId=" + correlationId
+            );
+
             replyChannel =
                     correlationRegistry.removeAndGet(correlationId);
+
         } else {
+
+            log.debug(() ->
+                    "[ResponseProcessor][process] Intermediate response received; retaining correlation"
+                            + " | correlationId=" + correlationId
+            );
+
             replyChannel =
                     correlationRegistry.get(correlationId);
+
             correlationRegistry.resetTimeout(
                     correlationId
             );
@@ -59,13 +94,18 @@ public class ResponseProcessor {
 
         if (replyChannel == null) {
 
-            FileLogger.log(
-                    "No pending request found for correlation ID: "
-                            + correlationId
+            log.warn(() ->
+                    "[ResponseProcessor][process] No pending request found for correlation ID"
+                            + " | correlationId=" + correlationId
             );
 
             return;
         }
+
+        log.debug(() ->
+                "[ResponseProcessor][process] Correlation resolved; forwarding response for delivery"
+                        + " | correlationId=" + correlationId
+        );
 
         attemptDelivery(response, replyChannel);
     }
@@ -75,6 +115,15 @@ public class ResponseProcessor {
             Message response,
             ReplyChannel replyChannel
     ) {
+
+        UUID correlationId = response.getCorrelationId();
+
+        log.debug(() ->
+                "[ResponseProcessor][attemptDelivery] Starting initial response delivery"
+                        + " | correlationId=" + correlationId
+                        + " | replyChannel="
+                        + replyChannel.getClass().getSimpleName()
+        );
 
         try {
 
@@ -91,9 +140,9 @@ public class ResponseProcessor {
 
                 if (exception == null) {
 
-                    FileLogger.log(
-                            "Response delivered successfully: "
-                                    + response.getCorrelationId()
+                    log.debug(() ->
+                            "[ResponseProcessor][attemptDelivery] Response delivered successfully"
+                                    + " | correlationId=" + correlationId
                     );
 
                 } else {
@@ -116,6 +165,7 @@ public class ResponseProcessor {
         }
     }
 
+
     private void handleInitialDeliveryFailure(
             Message response,
             ReplyChannel replyChannel,
@@ -124,10 +174,10 @@ public class ResponseProcessor {
 
         UUID correlationId = response.getCorrelationId();
 
-        FileLogger.log(
-                "Initial response delivery failed for "
-                        + correlationId + ": "
-                        + exception.getMessage()
+        log.error(
+                "[ResponseProcessor][handleInitialDeliveryFailure] Initial response delivery failed"
+                        + " | correlationId=" + correlationId,
+                exception
         );
 
         PendingDelivery pendingDelivery = new PendingDelivery(
@@ -138,9 +188,18 @@ public class ResponseProcessor {
 
         if (!retryRegistry.add(pendingDelivery)) {
 
-            FileLogger.log(
-                    "Unable to register response for retry: "
-                            + correlationId
+            log.warn(() ->
+                    "[ResponseProcessor][handleInitialDeliveryFailure] Unable to register response for retry"
+                            + " | correlationId=" + correlationId
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
+            );
+
+        } else {
+
+            log.debug(() ->
+                    "[ResponseProcessor][handleInitialDeliveryFailure] Response registered for retry"
+                            + " | correlationId=" + correlationId
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
             );
         }
     }
@@ -150,13 +209,29 @@ public class ResponseProcessor {
 
         UUID correlationId = pendingDelivery.getCorrelationId();
 
+        log.debug(() ->
+                "[ResponseProcessor][retry] Processing pending response delivery"
+                        + " | correlationId=" + correlationId
+                        + " | retryCount=" + pendingDelivery.getRetryCount()
+        );
 
         if (!pendingDelivery.tryStartRetry()) {
+
+            log.debug(() ->
+                    "[ResponseProcessor][retry] Retry skipped because another retry is already in progress"
+                            + " | correlationId=" + correlationId
+            );
+
             return;
         }
 
 
         if (retryRegistry.get(correlationId) != pendingDelivery) {
+
+            log.debug(() ->
+                    "[ResponseProcessor][retry] Retry skipped because pending delivery is no longer registered"
+                            + " | correlationId=" + correlationId
+            );
 
             pendingDelivery.finishRetry();
 
@@ -171,15 +246,17 @@ public class ResponseProcessor {
                     pendingDelivery
             );
 
-            FileLogger.log(
-                    "Pending delivery TTL expired for correlation ID: "
-                            + correlationId
+            log.warn(() ->
+                    "[ResponseProcessor][retry] Pending delivery TTL expired"
+                            + " | correlationId=" + correlationId
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
             );
 
             pendingDelivery.finishRetry();
 
             return;
         }
+
 
         if (!retryRegistry.canRetry(pendingDelivery)) {
 
@@ -188,10 +265,23 @@ public class ResponseProcessor {
                     pendingDelivery
             );
 
+            log.warn(() ->
+                    "[ResponseProcessor][retry] Pending delivery is no longer eligible for retry"
+                            + " | correlationId=" + correlationId
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
+                            + " | maxRetries=" + retryRegistry.getMaxRetries()
+            );
+
             pendingDelivery.finishRetry();
 
             return;
         }
+
+        log.debug(() ->
+                "[ResponseProcessor][retry] Attempting response redelivery"
+                        + " | correlationId=" + correlationId
+                        + " | retryCount=" + pendingDelivery.getRetryCount()
+        );
 
         CompletionStage<Void> delivery;
 
@@ -238,9 +328,10 @@ public class ResponseProcessor {
                                 pendingDelivery
                         );
 
-                        FileLogger.log(
-                                "Response retry delivered successfully: "
-                                        + correlationId
+                        log.debug(() ->
+                                "[ResponseProcessor][retry] Response retry delivered successfully"
+                                        + " | correlationId=" + correlationId
+                                        + " | retryCount=" + pendingDelivery.getRetryCount()
                         );
 
                     } else {
@@ -281,10 +372,11 @@ public class ResponseProcessor {
 
         UUID correlationId = pendingDelivery.getCorrelationId();
 
-        FileLogger.log(
-                "Response retry failed for "
-                        + correlationId + ": "
-                        + exception.getMessage()
+        log.error(
+                "[ResponseProcessor][handleRetryFailure] Response retry failed"
+                        + " | correlationId=" + correlationId
+                        + " | retryCount=" + pendingDelivery.getRetryCount(),
+                exception
         );
 
         if (retryRegistry.isExpired(pendingDelivery)) {
@@ -294,9 +386,10 @@ public class ResponseProcessor {
                     pendingDelivery
             );
 
-            FileLogger.log(
-                    "Pending delivery TTL expired for correlation ID: "
-                            + correlationId
+            log.warn(() ->
+                    "[ResponseProcessor][handleRetryFailure] Pending delivery TTL expired; delivery removed"
+                            + " | correlationId=" + correlationId
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
             );
 
             return;
@@ -307,14 +400,23 @@ public class ResponseProcessor {
 
         if (retryExhausted) {
 
-            FileLogger.log(
-                    "Maximum retry limit ("
-                            + retryRegistry.getMaxRetries()
-                            + ") exhausted for correlation ID: "
-                            + correlationId
+            log.warn(() ->
+                    "[ResponseProcessor][handleRetryFailure] Maximum retry limit exhausted"
+                            + " | correlationId=" + correlationId
+                            + " | maxRetries=" + retryRegistry.getMaxRetries()
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
+            );
+
+        } else {
+
+            log.debug(() ->
+                    "[ResponseProcessor][handleRetryFailure] Retry failure registered; delivery remains eligible for retry"
+                            + " | correlationId=" + correlationId
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
             );
         }
     }
+
 
     private Throwable unwrap(Throwable exception) {
 
@@ -333,6 +435,11 @@ public class ResponseProcessor {
             UUID correlationId,
             ReplyChannel replyChannel
     ) {
+
+        log.warn(() ->
+                "[ResponseProcessor][processExpiry] Processing request timeout"
+                        + " | correlationId=" + correlationId
+        );
 
         Message errorMessage = messageParser.createErrorResponse(
                 correlationId,
@@ -357,27 +464,29 @@ public class ResponseProcessor {
 
                 if (exception == null) {
 
-                    FileLogger.log(
-                            "Timeout response delivered: "
-                                    + correlationId
+                    log.debug(() ->
+                            "[ResponseProcessor][processExpiry] Timeout response delivered successfully"
+                                    + " | correlationId=" + correlationId
                     );
 
                 } else {
 
-                    FileLogger.log(
-                            "Timeout response delivery failed for "
-                                    + correlationId + ": "
-                                    + unwrap(exception).getMessage()
+                    Throwable deliveryFailure = unwrap(exception);
+
+                    log.error(
+                            "[ResponseProcessor][processExpiry] Timeout response delivery failed"
+                                    + " | correlationId=" + correlationId,
+                            deliveryFailure
                     );
                 }
             });
 
         } catch (Exception exception) {
 
-            FileLogger.log(
-                    "Unable to send timeout response for "
-                            + correlationId + ": "
-                            + exception.getMessage()
+            log.error(
+                    "[ResponseProcessor][processExpiry] Unable to send timeout response"
+                            + " | correlationId=" + correlationId,
+                    exception
             );
         }
     }

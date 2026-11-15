@@ -15,7 +15,38 @@ public class HealthReportAnalyzer {
 
     private static final long HEALTHY_THRESHOLD = 18;
     private static final long DEGRADED_THRESHOLD = 8;
-    private static final long RECOVERY_FAILED_THRESHOLD = -40;
+    /** Combine independent services without comparing their unrelated counters. */
+    public HealthStatus aggregateServices(List<HealthReport> reports) {
+        if (reports == null || reports.isEmpty()) {
+            return HealthStatus.UNREACHABLE;
+        }
+        HealthStatus overall = HealthStatus.HEALTHY;
+        Instant now = Instant.now();
+        for (HealthReport report : reports) {
+            HealthStatus status = report == null || report.status() == null
+                    ? HealthStatus.UNKNOWN : report.status();
+            if (report != null && (report.timestamp() == null
+                    || Duration.between(report.timestamp(), now).getSeconds() > 30)) {
+                status = HealthStatus.UNREACHABLE;
+            }
+            if (severity(status) > severity(overall)) {
+                overall = status;
+            }
+        }
+        return overall;
+    }
+
+    private int severity(HealthStatus status) {
+        return switch (status) {
+            case HEALTHY -> 0;
+            case DEGRADED -> 1;
+            case RECOVERING -> 2;
+            case UNKNOWN, INVALID -> 3;
+            case UNHEALTHY -> 4;
+            case UNREACHABLE -> 5;
+            case RECOVERY_FAILED -> 6;
+        };
+    }
 
     public HealthStatus analyze(List<HealthReport> reports) {
 
@@ -180,10 +211,7 @@ public class HealthReportAnalyzer {
             return HealthStatus.DEGRADED;
         }
 
-        if (score > RECOVERY_FAILED_THRESHOLD) {
-            return HealthStatus.UNHEALTHY;
-        }
-
-        return HealthStatus.RECOVERY_FAILED;
+        // A poor score indicates ill health, not a failed recovery attempt.
+        return HealthStatus.UNHEALTHY;
     }
 }

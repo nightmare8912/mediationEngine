@@ -29,6 +29,8 @@ public class ECConfigParser {
 
         String ecLabel = ec.getString("label");
         String ecId = ec.getString("id");
+        String tcpBindHost = ec.getString("tcp-bind-host");
+        String platformHost = ec.getString("platform-host");
 
         int tcpPort = ec.getInt("tcp-port");
         int tcpBacklog = ec.getInt("tcp-backlog");
@@ -78,6 +80,8 @@ public class ECConfigParser {
         return new EC(
                 ecId,
                 ecLabel,
+                tcpBindHost,
+                platformHost,
                 tcpPort,
                 tcpBacklog,
                 controlPort,
@@ -103,6 +107,7 @@ public class ECConfigParser {
 
         return new ConsolidatedECConfig(
                 ecConfig.getString("id"),
+                ecConfig.getString("host"),
                 ecConfig.getInt("tcp-port"),
                 ecConfig.getInt("control-port"),
                 ecConfig.getInt("startup-order"),

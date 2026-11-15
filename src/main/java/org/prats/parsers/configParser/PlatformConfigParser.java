@@ -69,6 +69,8 @@ public class PlatformConfigParser {
         return new Platform(
                 platformId,
                 platformLabel,
+                platform.getString("tcp-bind-host"),
+                platform.getString("control-bind-host"),
                 tcpPort,
                 tcpBacklog,
                 controlPort,
@@ -105,6 +107,7 @@ public class PlatformConfigParser {
 
         return new ConsolidatedECConfig(
                 ecConfig.getString("id"),
+                ecConfig.getString("host"),
                 ecConfig.getInt("tcp-port"),
                 ecConfig.getInt("control-port"),
                 ecConfig.getInt("startup-order"),

@@ -1,4 +1,3 @@
-
 package org.prats.processors;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -17,7 +16,7 @@ import org.prats.definitions.interfaces.TCPProcessor;
 
 import org.prats.definitions.records.TCPPeer;
 
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 import org.prats.parsers.MessageParser;
 
 import org.prats.registries.TCPControlRegistry;
@@ -39,6 +38,9 @@ import java.util.concurrent.TimeUnit;
 
 public class TCPControlProcessor
         implements TCPProcessor, ControlChannelCommunicator {
+
+    private static final EngineLogger log =
+            EngineLogger.getLogger(TCPControlProcessor.class);
 
 
     // ---------------------------------------------------------
@@ -117,6 +119,17 @@ public class TCPControlProcessor
 
     private volatile TCPService tcpService;
 
+    @Override
+    public java.util.List<java.net.Socket> connectedSockets() {
+        return activePeerConnections.values().stream().map(ClientConnection::getSocket)
+                .filter(socket -> !socket.isClosed()).toList();
+    }
+
+    public boolean isPeerConnected(String peerId) {
+        ClientConnection connection = activePeerConnections.get(peerId == null ? "" : peerId.trim().toUpperCase(Locale.ROOT));
+        return connection != null && !connection.getSocket().isClosed();
+    }
+
     private volatile ControlMessageHandler controlMessageHandler;
 
 
@@ -149,6 +162,12 @@ public class TCPControlProcessor
                                 "Configured peer list cannot be null"
                         )
                 );
+
+        log.info(() ->
+                "[TCPControlProcessor][constructor] TCP control processor initialized"
+                        + " | connectionMode=" + connectionMode
+                        + " | configuredPeers=" + this.configuredPeers.size()
+        );
     }
 
 
@@ -162,6 +181,11 @@ public class TCPControlProcessor
                 tcpService,
                 "TCP service cannot be null"
         );
+
+        log.debug(() ->
+                "[TCPControlProcessor][setTcpService] TCP service configured"
+                        + " | serviceType=" + tcpService.getClass().getSimpleName()
+        );
     }
 
 
@@ -172,6 +196,12 @@ public class TCPControlProcessor
         this.controlMessageHandler = Objects.requireNonNull(
                 controlMessageHandler,
                 "Control message handler cannot be null"
+        );
+
+        log.debug(() ->
+                "[TCPControlProcessor][setControlMessageHandler] Control message handler configured"
+                        + " | handlerType="
+                        + controlMessageHandler.getClass().getSimpleName()
         );
     }
 
@@ -189,18 +219,38 @@ public class TCPControlProcessor
         Objects.requireNonNull(connection);
 
         if (peerId.isBlank()) {
+            log.warn(
+                    "[TCPControlProcessor][registerPeerConnection] Peer registration rejected because peer ID is blank"
+            );
+
             throw new IllegalArgumentException(
                     "Peer ID cannot be blank"
             );
         }
 
+        log.debug(() ->
+                "[TCPControlProcessor][registerPeerConnection] Registering peer connection"
+                        + " | peerId=" + peerId
+        );
+
         if (!registerActivePeer(peerId, connection)) {
+
+            log.warn(() ->
+                    "[TCPControlProcessor][registerPeerConnection] A different active connection already exists"
+                            + " | peerId=" + peerId
+            );
 
             throw new IllegalStateException(
                     "A different active connection already exists for peer: "
                             + peerId
             );
         }
+
+        log.info(() ->
+                "[TCPControlProcessor][registerPeerConnection] Peer connection registered"
+                        + " | peerId=" + peerId
+                        + " | activePeerConnections=" + activePeerConnections.size()
+        );
     }
 
 
@@ -215,8 +265,19 @@ public class TCPControlProcessor
         peerId = normalizePeerId(peerId);
 
         if (peerId == null) {
+            log.debug(()->
+                    "[TCPControlProcessor][registerActivePeer] Peer registration skipped because normalized peer ID is null"
+            );
+
             return false;
         }
+
+        final String normalizedPeerId = peerId;
+
+        log.debug(() ->
+                "[TCPControlProcessor][registerActivePeer] Attempting active peer registration"
+                        + " | peerId=" + normalizedPeerId
+        );
 
         while (true) {
 
@@ -227,6 +288,13 @@ public class TCPControlProcessor
                     );
 
             if (existing == null || existing == connection) {
+
+                log.debug(() ->
+                        "[TCPControlProcessor][registerActivePeer] Active peer connection registered"
+                                + " | peerId=" + normalizedPeerId
+                                + " | alreadyRegistered=" + (existing == connection)
+                );
+
                 return true;
             }
 
@@ -242,11 +310,21 @@ public class TCPControlProcessor
                         connection
                 )) {
 
+                    log.info(() ->
+                            "[TCPControlProcessor][registerActivePeer] Replaced unusable peer connection"
+                                    + " | peerId=" + normalizedPeerId
+                    );
+
                     return true;
                 }
 
                 continue;
             }
+
+            log.warn(() ->
+                    "[TCPControlProcessor][registerActivePeer] Another usable connection already exists"
+                            + " | peerId=" + normalizedPeerId
+            );
 
             return false;
         }
@@ -262,22 +340,31 @@ public class TCPControlProcessor
             return;
         }
 
+        final String normalizedPeerId = normalizePeerId(peerId);
+
         activePeerConnections.remove(
-                peerId,
+                normalizedPeerId,
                 connection
         );
 
         PendingHandshake pending =
-                pendingPeerConnections.get(peerId);
+                pendingPeerConnections.get(normalizedPeerId);
 
         if (pending != null &&
                 pending.connection() == connection) {
 
             pendingPeerConnections.remove(
-                    peerId,
+                    normalizedPeerId,
                     pending
             );
         }
+
+        log.debug(() ->
+                "[TCPControlProcessor][removePeerConnection] Peer connection removal completed"
+                        + " | peerId=" + normalizedPeerId
+                        + " | activePeerConnections=" + activePeerConnections.size()
+                        + " | pendingPeerConnections=" + pendingPeerConnections.size()
+        );
     }
 
 
@@ -314,10 +401,18 @@ public class TCPControlProcessor
             return false;
         }
 
-        return configuredPeers.stream()
+        boolean configured = configuredPeers.stream()
                 .map(TCPPeer::processId)
                 .map(TCPControlProcessor::normalizePeerId)
                 .anyMatch(normalizedPeerId::equals);
+
+        log.debug(() ->
+                "[TCPControlProcessor][isConfiguredPeer] Peer configuration lookup completed"
+                        + " | peerId=" + normalizedPeerId
+                        + " | configured=" + configured
+        );
+
+        return configured;
     }
 
 
@@ -335,8 +430,16 @@ public class TCPControlProcessor
         ClientConnection registeredConnection =
                 activePeerConnections.get(senderId);
 
-        return registeredConnection == connection
+        boolean registered = registeredConnection == connection
                 && isConnectionUsable(connection);
+
+        log.debug(() ->
+                "[TCPControlProcessor][isRegisteredPeerConnection] Peer connection authentication evaluated"
+                        + " | peerId=" + senderId
+                        + " | registered=" + registered
+        );
+
+        return registered;
     }
 
 
@@ -352,11 +455,15 @@ public class TCPControlProcessor
 
             connection.getSocket().close();
 
+            log.debug(
+                    "[TCPControlProcessor][closeConnection] Socket connection closed"
+            );
+
         } catch (IOException exception) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Unable to close connection: "
-                            + exception.getMessage()
+            log.error(
+                    "[TCPControlProcessor][closeConnection] Unable to close connection",
+                    exception
             );
         }
     }
@@ -373,12 +480,22 @@ public class TCPControlProcessor
     ) {
 
         if (rawMessage == null || rawMessage.isBlank()) {
+
+            log.debug(
+                    "[TCPControlProcessor][processIncoming] Empty control message ignored"
+            );
+
             return;
         }
 
         Objects.requireNonNull(
                 clientConnection,
                 "Client connection cannot be null"
+        );
+
+        log.debug(() ->
+                "[TCPControlProcessor][processIncoming] Incoming control message received"
+                        + " | messageLength=" + rawMessage.length()
         );
 
         Message incomingMessage;
@@ -392,9 +509,9 @@ public class TCPControlProcessor
 
         } catch (Exception exception) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Message parsing failed: "
-                            + exception.getMessage()
+            log.error(
+                    "[TCPControlProcessor][processIncoming] Message parsing failed",
+                    exception
             );
 
             return;
@@ -409,6 +526,14 @@ public class TCPControlProcessor
                             "Message type cannot be null"
                     );
 
+            log.debug(() ->
+                    "[TCPControlProcessor][processIncoming] Control message parsed"
+                            + " | messageType=" + messageType
+                            + " | operation=" + incomingMessage.getOperation()
+                            + " | processName=" + incomingMessage.getProcessName()
+                            + " | correlationId=" + incomingMessage.getCorrelationId()
+            );
+
 
             switch (messageType) {
 
@@ -418,6 +543,10 @@ public class TCPControlProcessor
 
                 case HANDSHAKE_REQUEST -> {
 
+                    log.debug(
+                            "[TCPControlProcessor][processIncoming] Handshake request received"
+                    );
+
                     resolveHandshakeRequest(
                             incomingMessage,
                             clientConnection
@@ -426,6 +555,10 @@ public class TCPControlProcessor
 
 
                 case HANDSHAKE_RESPONSE -> {
+
+                    log.debug(
+                            "[TCPControlProcessor][processIncoming] Handshake response received"
+                    );
 
                     resolveHandshakeResponse(
                             incomingMessage,
@@ -444,6 +577,12 @@ public class TCPControlProcessor
                             incomingMessage,
                             clientConnection
                     )) {
+
+                        log.warn(() ->
+                                "[TCPControlProcessor][processIncoming] Request rejected because peer has not completed handshake"
+                                        + " | processName=" + incomingMessage.getProcessName()
+                                        + " | correlationId=" + incomingMessage.getCorrelationId()
+                        );
 
                         sendProtocolError(
                                 incomingMessage,
@@ -473,17 +612,16 @@ public class TCPControlProcessor
                             clientConnection
                     )) {
 
-                        FileLogger.log(
-                                "[TCPControlProcessor] "
-                                        + "Response received from "
-                                        + "an unregistered peer."
+                        log.warn(() ->
+                                "[TCPControlProcessor][processIncoming] Response received from an unregistered peer"
+                                        + " | processName=" + incomingMessage.getProcessName()
+                                        + " | correlationId=" + incomingMessage.getCorrelationId()
                         );
 
                         return;
                     }
 
-                    requireControlMessageHandler()
-                            .onResponse(incomingMessage);
+                    deliverCorrelatedResponse(incomingMessage);
                 }
 
 
@@ -497,6 +635,10 @@ public class TCPControlProcessor
                             incomingMessage,
                             clientConnection
                     )) {
+
+                        log.debug(
+                                "[TCPControlProcessor][processIncoming] Heartbeat ignored because peer is not registered"
+                        );
 
                         return;
                     }
@@ -517,6 +659,10 @@ public class TCPControlProcessor
                             clientConnection
                     )) {
 
+                        log.debug(
+                                "[TCPControlProcessor][processIncoming] Information message ignored because peer is not registered"
+                        );
+
                         return;
                     }
 
@@ -531,9 +677,10 @@ public class TCPControlProcessor
 
                 default -> {
 
-                    FileLogger.log(
-                            "[TCPControlProcessor] Unsupported message type: "
-                                    + messageType
+                    log.warn(() ->
+                            "[TCPControlProcessor][processIncoming] Unsupported control message type"
+                                    + " | messageType=" + messageType
+                                    + " | correlationId=" + incomingMessage.getCorrelationId()
                     );
 
                     sendProtocolError(
@@ -547,9 +694,9 @@ public class TCPControlProcessor
 
         } catch (Exception exception) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Control message processing failed: "
-                            + exception
+            log.error(
+                    "[TCPControlProcessor][processIncoming] Control message processing failed",
+                    exception
             );
         }
     }
@@ -561,6 +708,49 @@ public class TCPControlProcessor
                 controlMessageHandler,
                 "Control message handler has not been initialized"
         );
+    }
+
+    private void deliverCorrelatedResponse(Message response) {
+        UUID correlationId = Objects.requireNonNull(
+                response.getCorrelationId(),
+                "Control response correlation ID cannot be null"
+        );
+
+        ReplyChannel replyChannel;
+        if (response.isResponseComplete()) {
+            replyChannel = tcpControlRegistry.removeAndGet(correlationId);
+        } else {
+            replyChannel = tcpControlRegistry.get(correlationId);
+            tcpControlRegistry.resetTimeout(correlationId);
+        }
+
+        if (replyChannel == null) {
+            log.warn(() ->
+                    "[TCPControlProcessor][deliverCorrelatedResponse] No pending control request for response"
+                            + " | correlationId=" + correlationId
+                            + " | responseComplete=" + response.isResponseComplete()
+            );
+            requireControlMessageHandler().onResponse(response);
+            return;
+        }
+
+        try {
+            replyChannel.sendReply(response).whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    log.error(
+                            "[TCPControlProcessor][deliverCorrelatedResponse] Control response delivery failed"
+                                    + " | correlationId=" + correlationId,
+                            failure
+                    );
+                }
+            });
+        } catch (RuntimeException failure) {
+            log.error(
+                    "[TCPControlProcessor][deliverCorrelatedResponse] Unable to deliver control response"
+                            + " | correlationId=" + correlationId,
+                    failure
+            );
+        }
     }
 
 
@@ -578,14 +768,18 @@ public class TCPControlProcessor
 
         if (correlationId == null) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Received request without "
-                            + "correlation ID."
+            log.warn(
+                    "[TCPControlProcessor][handleIncomingRequest] Received request without correlation ID"
             );
 
             return;
         }
 
+        log.debug(() ->
+                "[TCPControlProcessor][handleIncomingRequest] Handling authenticated peer request"
+                        + " | correlationId=" + correlationId
+                        + " | processName=" + incomingMessage.getProcessName()
+        );
 
         ReplyChannel replyChannel =
                 new TCPReplyChannel(
@@ -601,6 +795,12 @@ public class TCPControlProcessor
                     replyChannel
             );
 
+            log.debug(() ->
+                    "[TCPControlProcessor][handleIncomingRequest] Control correlation registered"
+                            + " | correlationId=" + correlationId
+                            + " | registrySize=" + tcpControlRegistry.getSize()
+            );
+
             requireControlMessageHandler()
                     .onRequest(incomingMessage);
 
@@ -608,9 +808,10 @@ public class TCPControlProcessor
 
             tcpControlRegistry.removeAndGet(correlationId);
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Request handler failed: "
-                            + exception
+            log.error(
+                    "[TCPControlProcessor][handleIncomingRequest] Request handler failed"
+                            + " | correlationId=" + correlationId,
+                    exception
             );
 
             sendProtocolError(
@@ -636,6 +837,12 @@ public class TCPControlProcessor
             return;
         }
 
+        log.debug(() ->
+                "[TCPControlProcessor][sendProtocolError] Creating protocol error response"
+                        + " | correlationId=" + correlationId
+                        + " | errorCode=" + errorCode
+        );
+
         Message errorResponse =
                 messageParser.createErrorResponse(
                         correlationId,
@@ -652,9 +859,11 @@ public class TCPControlProcessor
 
             if (exception != null) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Unable to send protocol error: "
-                                + exception.getMessage()
+                log.error(
+                        "[TCPControlProcessor][sendProtocolError] Unable to send protocol error"
+                                + " | correlationId=" + correlationId
+                                + " | errorCode=" + errorCode,
+                        exception
                 );
             }
         });
@@ -668,9 +877,19 @@ public class TCPControlProcessor
     @Override
     public String serialize(Message message) {
 
-        return messageParser.createJSONFromMessage(
+        String serializedMessage = messageParser.createJSONFromMessage(
                 Objects.requireNonNull(message)
         );
+
+        log.debug(() ->
+                "[TCPControlProcessor][serialize] Control message serialized"
+                        + " | messageType=" + message.getMessageType()
+                        + " | operation=" + message.getOperation()
+                        + " | serializedLength="
+                        + (serializedMessage == null ? 0 : serializedMessage.length())
+        );
+
+        return serializedMessage;
     }
 
 
@@ -695,19 +914,34 @@ public class TCPControlProcessor
         Objects.requireNonNull(outgoing);
         Objects.requireNonNull(clientConnection);
 
+        log.debug(() ->
+                "[TCPControlProcessor][processOutgoing] Sending message directly over supplied connection"
+                        + " | messageType=" + outgoing.getMessageType()
+                        + " | operation=" + outgoing.getOperation()
+                        + " | correlationId=" + outgoing.getCorrelationId()
+        );
+
         try {
 
             clientConnection.sendMessage(
                     serialize(outgoing)
             );
 
+            log.debug(() ->
+                    "[TCPControlProcessor][processOutgoing] Direct socket write completed"
+                            + " | messageType=" + outgoing.getMessageType()
+                            + " | correlationId=" + outgoing.getCorrelationId()
+            );
+
             return CompletableFuture.completedFuture(null);
 
         } catch (Exception exception) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Direct socket write failed: "
-                            + exception.getMessage()
+            log.error(
+                    "[TCPControlProcessor][processOutgoing] Direct socket write failed"
+                            + " | messageType=" + outgoing.getMessageType()
+                            + " | correlationId=" + outgoing.getCorrelationId(),
+                    exception
             );
 
             return CompletableFuture.failedFuture(exception);
@@ -723,6 +957,11 @@ public class TCPControlProcessor
             MessageType handshakeType,
             String body
     ) {
+
+        log.debug(() ->
+                "[TCPControlProcessor][createHandshakeMessage] Creating handshake message"
+                        + " | messageType=" + handshakeType
+        );
 
         Message handshake =
                 messageParser.createEmptyMessage();
@@ -751,6 +990,10 @@ public class TCPControlProcessor
             ClientConnection connection
     ) {
 
+        log.debug(
+                "[TCPControlProcessor][sendHandshake] Creating and sending handshake request"
+        );
+
         Message handshakeRequest =
                 createHandshakeMessage(
                         MessageType.HANDSHAKE_REQUEST,
@@ -778,6 +1021,12 @@ public class TCPControlProcessor
                 ? HANDSHAKE_ACCEPTED
                 : HANDSHAKE_REJECTED;
 
+        log.debug(() ->
+                "[TCPControlProcessor][sendHandshakeResponse] Sending handshake response"
+                        + " | peerId=" + peerId
+                        + " | accepted=" + accepted
+        );
+
         Message handshakeResponse =
                 createHandshakeMessage(
                         MessageType.HANDSHAKE_RESPONSE,
@@ -799,10 +1048,11 @@ public class TCPControlProcessor
                     );
                 }
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Unable to send handshake "
-                                + "response to peer: " + peerId
-                                + " | " + exception.getMessage()
+                log.error(
+                        "[TCPControlProcessor][sendHandshakeResponse] Unable to send handshake response"
+                                + " | peerId=" + peerId
+                                + " | accepted=" + accepted,
+                        exception
                 );
 
                 closeConnection(connection);
@@ -812,16 +1062,16 @@ public class TCPControlProcessor
 
             if (accepted) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Handshake accepted: "
-                                + peerId
+                log.info(() ->
+                        "[TCPControlProcessor][sendHandshakeResponse] Handshake accepted"
+                                + " | peerId=" + peerId
                 );
 
             } else {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Handshake rejected: "
-                                + peerId
+                log.warn(() ->
+                        "[TCPControlProcessor][sendHandshakeResponse] Handshake rejected"
+                                + " | peerId=" + peerId
                 );
 
                 closeConnection(connection);
@@ -848,10 +1098,19 @@ public class TCPControlProcessor
             ClientConnection clientConnection
     ) {
 
+        String incomingPeerId = handshake.getProcessName();
+
+        log.debug(() ->
+                "[TCPControlProcessor][resolveHandshakeRequest] Resolving incoming handshake"
+                        + " | peerId=" + incomingPeerId
+        );
+
         if (handshake.getOperation() != Operation.HANDSHAKE) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Invalid handshake operation."
+            log.warn(() ->
+                    "[TCPControlProcessor][resolveHandshakeRequest] Invalid handshake operation"
+                            + " | peerId=" + incomingPeerId
+                            + " | operation=" + handshake.getOperation()
             );
 
             sendHandshakeResponse(
@@ -867,6 +1126,10 @@ public class TCPControlProcessor
         String peerId = normalizePeerId(handshake.getProcessName());
 
         if (peerId == null || peerId.isBlank()) {
+
+            log.warn(
+                    "[TCPControlProcessor][resolveHandshakeRequest] Handshake rejected because peer ID is missing"
+            );
 
             sendHandshakeResponse(
                     clientConnection,
@@ -884,9 +1147,9 @@ public class TCPControlProcessor
          */
         if (!isConfiguredPeer(peerId)) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Unknown peer attempted "
-                            + "handshake: " + peerId
+            log.warn(() ->
+                    "[TCPControlProcessor][resolveHandshakeRequest] Unknown peer attempted handshake"
+                            + " | peerId=" + peerId
             );
 
             sendHandshakeResponse(
@@ -914,9 +1177,9 @@ public class TCPControlProcessor
 
         if (!registered) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Duplicate active connection "
-                            + "attempt from peer: " + peerId
+            log.warn(() ->
+                    "[TCPControlProcessor][resolveHandshakeRequest] Duplicate active connection attempt from peer"
+                            + " | peerId=" + peerId
             );
 
             sendHandshakeResponse(
@@ -928,6 +1191,11 @@ public class TCPControlProcessor
             return;
         }
 
+        log.info(() ->
+                "[TCPControlProcessor][resolveHandshakeRequest] Configured peer registered; sending handshake acceptance"
+                        + " | peerId=" + peerId
+                        + " | activePeerConnections=" + activePeerConnections.size()
+        );
 
         sendHandshakeResponse(
                 clientConnection,
@@ -946,10 +1214,17 @@ public class TCPControlProcessor
             ClientConnection clientConnection
     ) {
 
+        log.debug(() ->
+                "[TCPControlProcessor][resolveHandshakeResponse] Resolving outgoing handshake response"
+                        + " | peerId=" + handshake.getProcessName()
+        );
+
         if (handshake.getOperation() != Operation.HANDSHAKE) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Invalid handshake response operation."
+            log.warn(() ->
+                    "[TCPControlProcessor][resolveHandshakeResponse] Invalid handshake response operation"
+                            + " | peerId=" + handshake.getProcessName()
+                            + " | operation=" + handshake.getOperation()
             );
 
             rejectPendingHandshake(
@@ -964,8 +1239,8 @@ public class TCPControlProcessor
 
         if (peerId == null) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Handshake response has no peer ID."
+            log.warn(
+                    "[TCPControlProcessor][resolveHandshakeResponse] Handshake response has no peer ID"
             );
 
             closeConnection(clientConnection);
@@ -978,11 +1253,10 @@ public class TCPControlProcessor
         if (pending == null ||
                 pending.connection() != clientConnection) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Unexpected handshake response "
-                            + "from peer: " + peerId
-                            + " | Pending peers: "
-                            + pendingPeerConnections.keySet()
+            log.warn(() ->
+                    "[TCPControlProcessor][resolveHandshakeResponse] Unexpected handshake response"
+                            + " | peerId=" + peerId
+                            + " | pendingPeers=" + pendingPeerConnections.keySet()
             );
 
             closeConnection(clientConnection);
@@ -1002,9 +1276,10 @@ public class TCPControlProcessor
 
         } catch (JsonProcessingException exception) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Unable to decode handshake "
-                            + "response from: " + peerId
+            log.error(
+                    "[TCPControlProcessor][resolveHandshakeResponse] Unable to decode handshake response"
+                            + " | peerId=" + peerId,
+                    exception
             );
 
             rejectPendingHandshake(peerId, clientConnection);
@@ -1015,10 +1290,10 @@ public class TCPControlProcessor
 
             rejectPendingHandshake(peerId, clientConnection);
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Peer rejected handshake: "
-                            + peerId
-                            + " | Response: " + responseBody
+            log.warn(() ->
+                    "[TCPControlProcessor][resolveHandshakeResponse] Peer rejected handshake"
+                            + " | peerId=" + peerId
+                            + " | response=" + responseBody
             );
 
             return;
@@ -1028,9 +1303,9 @@ public class TCPControlProcessor
 
             rejectPendingHandshake(peerId, clientConnection);
 
-            FileLogger.log(
-                    "[TCPControlProcessor] Another active connection "
-                            + "already exists for peer: " + peerId
+            log.warn(() ->
+                    "[TCPControlProcessor][resolveHandshakeResponse] Another active connection already exists for peer"
+                            + " | peerId=" + peerId
             );
 
             return;
@@ -1038,9 +1313,11 @@ public class TCPControlProcessor
 
         pendingPeerConnections.remove(peerId, pending);
 
-        FileLogger.log(
-                "[TCPControlProcessor] Peer handshake completed: "
-                        + peerId
+        log.info(() ->
+                "[TCPControlProcessor][resolveHandshakeResponse] Peer handshake completed successfully"
+                        + " | peerId=" + peerId
+                        + " | activePeerConnections=" + activePeerConnections.size()
+                        + " | pendingPeerConnections=" + pendingPeerConnections.size()
         );
     }
 
@@ -1064,6 +1341,11 @@ public class TCPControlProcessor
                     peerId,
                     pending
             );
+
+            log.debug(() ->
+                    "[TCPControlProcessor][rejectPendingHandshake] Pending handshake registration removed"
+                            + " | peerId=" + peerId
+            );
         }
 
         closeConnection(clientConnection);
@@ -1078,9 +1360,20 @@ public class TCPControlProcessor
     @Override
     public synchronized void reconcilePeers() {
 
-
+        log.debug(() ->
+                "[TCPControlProcessor][reconcilePeers] Starting peer reconciliation"
+                        + " | connectionMode=" + connectionMode
+                        + " | configuredPeers=" + configuredPeers.size()
+                        + " | activePeers=" + activePeerConnections.size()
+                        + " | pendingHandshakes=" + pendingPeerConnections.size()
+        );
 
         if (connectionMode == TCPConnectionMode.SERVER_ONLY) {
+
+            log.debug(
+                    "[TCPControlProcessor][reconcilePeers] Peer reconciliation skipped because connection mode is SERVER_ONLY"
+            );
+
             return;
         }
 
@@ -1089,8 +1382,8 @@ public class TCPControlProcessor
 
         if (service == null) {
 
-            FileLogger.log(
-                    "[TCPControlProcessor] TCP service has not been initialized."
+            log.error(
+                    "[TCPControlProcessor][reconcilePeers] TCP service has not been initialized"
             );
 
             return;
@@ -1112,6 +1405,13 @@ public class TCPControlProcessor
                 continue;
             }
 
+            log.debug(() ->
+                    "[TCPControlProcessor][reconcilePeers] Evaluating configured peer"
+                            + " | peerId=" + peerId
+                            + " | host=" + peer.host()
+                            + " | port=" + peer.port()
+            );
+
 
             // ---------------------------------------------
             // Check existing active connection
@@ -1123,12 +1423,23 @@ public class TCPControlProcessor
             if (active != null) {
 
                 if (isConnectionUsable(active)) {
+
+                    log.debug(() ->
+                            "[TCPControlProcessor][reconcilePeers] Peer already has a usable active connection"
+                                    + " | peerId=" + peerId
+                    );
+
                     continue;
                 }
 
                 activePeerConnections.remove(
                         peerId,
                         active
+                );
+
+                log.warn(() ->
+                        "[TCPControlProcessor][reconcilePeers] Removed unusable active peer connection"
+                                + " | peerId=" + peerId
                 );
             }
 
@@ -1138,6 +1449,12 @@ public class TCPControlProcessor
             // ---------------------------------------------
 
             if (pendingPeerConnections.containsKey(peerId)) {
+
+                log.debug(() ->
+                        "[TCPControlProcessor][reconcilePeers] Connection attempt skipped because handshake is already pending"
+                                + " | peerId=" + peerId
+                );
+
                 continue;
             }
 
@@ -1150,14 +1467,21 @@ public class TCPControlProcessor
 
             try {
 
+                log.debug(() ->
+                        "[TCPControlProcessor][reconcilePeers] Attempting TCP connection to peer"
+                                + " | peerId=" + peerId
+                                + " | host=" + peer.host()
+                                + " | port=" + peer.port()
+                );
+
                 connection = service.attemptConnection(peer);
 
             } catch (Exception exception) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Connection attempt failed "
-                                + "for peer: " + peerId
-                                + " | " + exception.getMessage()
+                log.error(
+                        "[TCPControlProcessor][reconcilePeers] Connection attempt failed"
+                                + " | peerId=" + peerId,
+                        exception
                 );
 
                 continue;
@@ -1165,6 +1489,12 @@ public class TCPControlProcessor
 
 
             if (connection == null) {
+
+                log.debug(() ->
+                        "[TCPControlProcessor][reconcilePeers] TCP service returned no connection"
+                                + " | peerId=" + peerId
+                );
+
                 continue;
             }
 
@@ -1187,9 +1517,20 @@ public class TCPControlProcessor
 
             if (existing != null) {
 
+                log.warn(() ->
+                        "[TCPControlProcessor][reconcilePeers] Another pending handshake already exists; closing duplicate connection"
+                                + " | peerId=" + peerId
+                );
+
                 closeConnection(connection);
                 continue;
             }
+
+            log.debug(() ->
+                    "[TCPControlProcessor][reconcilePeers] Pending handshake registered"
+                            + " | peerId=" + peerId
+                            + " | pendingHandshakes=" + pendingPeerConnections.size()
+            );
 
 
             // ---------------------------------------------
@@ -1206,16 +1547,22 @@ public class TCPControlProcessor
                                     pending
                             );
 
-                            FileLogger.log(
-                                    "[TCPControlProcessor] Handshake "
-                                            + "request delivery failed for "
-                                            + peerId + " | " + exception
+                            log.error(
+                                    "[TCPControlProcessor][reconcilePeers] Handshake request delivery failed"
+                                            + " | peerId=" + peerId,
+                                    exception
                             );
 
                             closeConnection(connection);
                         }
                     });
         }
+
+        log.debug(() ->
+                "[TCPControlProcessor][reconcilePeers] Peer reconciliation completed"
+                        + " | activePeers=" + activePeerConnections.size()
+                        + " | pendingHandshakes=" + pendingPeerConnections.size()
+        );
     }
 
 
@@ -1226,6 +1573,8 @@ public class TCPControlProcessor
     private void cleanupExpiredHandshakes() {
 
         long now = System.nanoTime();
+
+        int removedHandshakes = 0;
 
         for (Map.Entry<String, PendingHandshake> entry :
                 pendingPeerConnections.entrySet()) {
@@ -1247,9 +1596,12 @@ public class TCPControlProcessor
                     pending
             )) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Handshake timed out "
-                                + "for peer: " + peerId
+                removedHandshakes++;
+
+                log.warn(() ->
+                        "[TCPControlProcessor][cleanupExpiredHandshakes] Handshake timed out"
+                                + " | peerId=" + peerId
+                                + " | timeoutMillis=" + HANDSHAKE_TIMEOUT_MILLIS
                 );
 
                 closeConnection(
@@ -1257,6 +1609,14 @@ public class TCPControlProcessor
                 );
             }
         }
+
+        final int expiredHandshakeCount = removedHandshakes;
+
+        log.debug(() ->
+                "[TCPControlProcessor][cleanupExpiredHandshakes] Pending handshake cleanup completed"
+                        + " | removedHandshakes=" + expiredHandshakeCount
+                        + " | pendingHandshakes=" + pendingPeerConnections.size()
+        );
     }
 
 
@@ -1270,6 +1630,14 @@ public class TCPControlProcessor
 
         Objects.requireNonNull(outgoing);
 
+        log.debug(() ->
+                "[TCPControlProcessor][processOutgoing] Routing outgoing control message"
+                        + " | messageType=" + outgoing.getMessageType()
+                        + " | operation=" + outgoing.getOperation()
+                        + " | correlationId=" + outgoing.getCorrelationId()
+                        + " | recipientId=" + outgoing.getRecipientID()
+        );
+
 
         // ---------------------------------------------
         // RESPONSE: use correlated reply channel
@@ -1281,6 +1649,10 @@ public class TCPControlProcessor
                     outgoing.getCorrelationId();
 
             if (correlationId == null) {
+
+                log.warn(
+                        "[TCPControlProcessor][processOutgoing] Response rejected because correlation ID is null"
+                );
 
                 return CompletableFuture.failedFuture(
                         new IllegalArgumentException(
@@ -1294,12 +1666,22 @@ public class TCPControlProcessor
 
             if (outgoing.isResponseComplete()) {
 
+                log.debug(() ->
+                        "[TCPControlProcessor][processOutgoing] Final response; removing control correlation"
+                                + " | correlationId=" + correlationId
+                );
+
                 replyChannel =
                         tcpControlRegistry.removeAndGet(
                                 correlationId
                         );
 
             } else {
+
+                log.debug(() ->
+                        "[TCPControlProcessor][processOutgoing] Intermediate response; retaining control correlation"
+                                + " | correlationId=" + correlationId
+                );
 
                 replyChannel =
                         tcpControlRegistry.get(
@@ -1314,6 +1696,11 @@ public class TCPControlProcessor
 
             if (replyChannel == null) {
 
+                log.warn(() ->
+                        "[TCPControlProcessor][processOutgoing] No pending reply channel found"
+                                + " | correlationId=" + correlationId
+                );
+
                 return CompletableFuture.failedFuture(
                         new IllegalStateException(
                                 "No pending reply channel for correlation ID: "
@@ -1321,6 +1708,11 @@ public class TCPControlProcessor
                         )
                 );
             }
+
+            log.debug(() ->
+                    "[TCPControlProcessor][processOutgoing] Dispatching response through correlated reply channel"
+                            + " | correlationId=" + correlationId
+            );
 
             return replyChannel.sendReply(outgoing);
         }
@@ -1335,6 +1727,10 @@ public class TCPControlProcessor
 
         if (recipientId == null || recipientId.isBlank()) {
 
+            log.warn(
+                    "[TCPControlProcessor][processOutgoing] Outgoing message rejected because recipient ID is missing"
+            );
+
             return CompletableFuture.failedFuture(
                     new IllegalArgumentException(
                             "Outgoing message recipient ID is missing"
@@ -1347,6 +1743,12 @@ public class TCPControlProcessor
                 activePeerConnections.get(recipientId);
 
         if (connection == null) {
+
+            log.warn(() ->
+                    "[TCPControlProcessor][processOutgoing] No active connection found for recipient"
+                            + " | recipientId=" + recipientId
+                            + " | activePeerConnections=" + activePeerConnections.size()
+            );
 
             return CompletableFuture.failedFuture(
                     new IllegalStateException(
@@ -1365,6 +1767,11 @@ public class TCPControlProcessor
 
             closeConnection(connection);
 
+            log.warn(() ->
+                    "[TCPControlProcessor][processOutgoing] Recipient connection is no longer usable"
+                            + " | recipientId=" + recipientId
+            );
+
             return CompletableFuture.failedFuture(
                     new IllegalStateException(
                             "Connection is no longer usable for peer: "
@@ -1378,6 +1785,10 @@ public class TCPControlProcessor
 
         if (service == null) {
 
+            log.error(
+                    "[TCPControlProcessor][processOutgoing] TCP service has not been initialized"
+            );
+
             return CompletableFuture.failedFuture(
                     new IllegalStateException(
                             "TCP service has not been initialized"
@@ -1385,6 +1796,11 @@ public class TCPControlProcessor
             );
         }
 
+        log.debug(() ->
+                "[TCPControlProcessor][processOutgoing] Writing message to active peer connection"
+                        + " | recipientId=" + recipientId
+                        + " | messageType=" + outgoing.getMessageType()
+        );
 
         return service.writeMessage(
                 serialize(outgoing),
@@ -1405,6 +1821,13 @@ public class TCPControlProcessor
         Objects.requireNonNull(outgoing);
         Objects.requireNonNull(replyChannel);
 
+        log.debug(() ->
+                "[TCPControlProcessor][processOutgoing] Sending message through supplied reply channel"
+                        + " | messageType=" + outgoing.getMessageType()
+                        + " | correlationId=" + outgoing.getCorrelationId()
+                        + " | replyChannel=" + replyChannel.getClass().getSimpleName()
+        );
+
         return replyChannel.sendReply(outgoing);
     }
 
@@ -1415,10 +1838,25 @@ public class TCPControlProcessor
 
     public void cleanupExpiredCorrelations() {
 
+        log.debug(() ->
+                "[TCPControlProcessor][cleanupExpiredCorrelations] Starting control correlation cleanup"
+                        + " | currentCorrelations=" + tcpControlRegistry.getSize()
+                        + " | timeoutMillis=" + CORRELATION_TIMEOUT_MILLIS
+        );
+
+        int expiredCount = 0;
+
         for (TCPControlRegistry.ExpiredCorrelation expired :
                 tcpControlRegistry.removeExpired(
                         CORRELATION_TIMEOUT_MILLIS
                 )) {
+
+            expiredCount++;
+
+            log.warn(() ->
+                    "[TCPControlProcessor][cleanupExpiredCorrelations] Control request correlation expired"
+                            + " | correlationId=" + expired.correlationId()
+            );
 
             try {
 
@@ -1435,22 +1873,31 @@ public class TCPControlProcessor
 
                             if (exception != null) {
 
-                                FileLogger.log(
-                                        "[TCPControlProcessor] Timeout "
-                                                + "reply delivery failed: "
-                                                + exception.getMessage()
+                                log.error(
+                                        "[TCPControlProcessor][cleanupExpiredCorrelations] Timeout reply delivery failed"
+                                                + " | correlationId=" + expired.correlationId(),
+                                        exception
                                 );
                             }
                         });
 
             } catch (Exception exception) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Timeout cleanup failed: "
-                                + exception.getMessage()
+                log.error(
+                        "[TCPControlProcessor][cleanupExpiredCorrelations] Timeout cleanup failed"
+                                + " | correlationId=" + expired.correlationId(),
+                        exception
                 );
             }
         }
+
+        final int expiredCorrelationCount = expiredCount;
+
+        log.debug(() ->
+                "[TCPControlProcessor][cleanupExpiredCorrelations] Control correlation cleanup completed"
+                        + " | expiredCorrelations=" + expiredCorrelationCount
+                        + " | remainingCorrelations=" + tcpControlRegistry.getSize()
+        );
     }
 
 
@@ -1463,8 +1910,16 @@ public class TCPControlProcessor
             Message request
     ) {
 
+        Objects.requireNonNull(request);
+
+        log.debug(() ->
+                "[TCPControlProcessor][sendRequest] Sending control request"
+                        + " | correlationId=" + request.getCorrelationId()
+                        + " | recipientId=" + request.getRecipientID()
+        );
+
         return processOutgoing(
-                Objects.requireNonNull(request)
+                request
         );
     }
 
@@ -1483,6 +1938,11 @@ public class TCPControlProcessor
                         "Request correlation ID cannot be null"
                 );
 
+        log.debug(() ->
+                "[TCPControlProcessor][sendRequest] Registering reply channel for outgoing control request"
+                        + " | correlationId=" + correlationId
+        );
+
 
         tcpControlRegistry.add(
                 correlationId,
@@ -1498,6 +1958,18 @@ public class TCPControlProcessor
                         tcpControlRegistry.removeAndGet(
                                 correlationId
                         );
+
+                        log.error(
+                                "[TCPControlProcessor][sendRequest] Control request delivery failed; correlation removed"
+                                        + " | correlationId=" + correlationId,
+                                exception
+                        );
+                    } else {
+
+                        log.debug(() ->
+                                "[TCPControlProcessor][sendRequest] Control request submitted successfully"
+                                        + " | correlationId=" + correlationId
+                        );
                     }
                 });
     }
@@ -1508,15 +1980,21 @@ public class TCPControlProcessor
             Message response
     ) {
 
+        log.debug(() ->
+                "[TCPControlProcessor][sendResponse] Sending control response"
+                        + " | correlationId=" + response.getCorrelationId()
+                        + " | messageType=" + response.getMessageType()
+        );
+
         processOutgoing(response)
                 .whenComplete((ignored, exception) -> {
 
                     if (exception != null) {
 
-                        FileLogger.log(
-                                "[TCPControlProcessor] Unable to send "
-                                        + "response: "
-                                        + exception.getMessage()
+                        log.error(
+                                "[TCPControlProcessor][sendResponse] Unable to send control response"
+                                        + " | correlationId=" + response.getCorrelationId(),
+                                exception
                         );
                     }
                 });
@@ -1531,6 +2009,11 @@ public class TCPControlProcessor
         if (connectionName == null || connectionName.isBlank()) {
             return;
         }
+
+        log.info(() ->
+                "[TCPControlProcessor][disconnect] Disconnecting peer"
+                        + " | peerId=" + connectionName
+        );
 
 
         ClientConnection active =
@@ -1549,9 +2032,13 @@ public class TCPControlProcessor
         }
 
 
-        FileLogger.log(
-                "[TCPControlProcessor] Disconnected peer: "
-                        + connectionName
+        log.info(() ->
+                "[TCPControlProcessor][disconnect] Peer disconnected"
+                        + " | peerId=" + connectionName
+                        + " | activeConnectionRemoved=" + (active != null)
+                        + " | pendingHandshakeRemoved=" + (pending != null)
+                        + " | activePeerConnections=" + activePeerConnections.size()
+                        + " | pendingPeerConnections=" + pendingPeerConnections.size()
         );
     }
 
@@ -1563,17 +2050,28 @@ public class TCPControlProcessor
     @Override
     public void cleanupCorrelations() {
 
+        log.debug(
+                "[TCPControlProcessor][cleanupCorrelations] TCP control cleanup cycle started"
+        );
+
         cleanupExpiredCorrelations();
 
         cleanupExpiredHandshakes();
+
+        log.debug(
+                "[TCPControlProcessor][cleanupCorrelations] TCP control cleanup cycle completed"
+        );
     }
 
 
     @Override
     public void informShutdown() {
 
-        FileLogger.log(
-                "[TCPControlProcessor] Shutdown initiated."
+        log.info(() ->
+                "[TCPControlProcessor][informShutdown] TCP control processor shutdown initiated"
+                        + " | activePeers=" + activePeerConnections.size()
+                        + " | pendingHandshakes=" + pendingPeerConnections.size()
+                        + " | correlations=" + tcpControlRegistry.getSize()
         );
 
 
@@ -1599,19 +2097,20 @@ public class TCPControlProcessor
 
                             if (exception != null) {
 
-                                FileLogger.log(
-                                        "[TCPControlProcessor] Shutdown "
-                                                + "reply delivery failed: "
-                                                + exception.getMessage()
+                                log.error(
+                                        "[TCPControlProcessor][informShutdown] Shutdown reply delivery failed"
+                                                + " | correlationId=" + expired.correlationId(),
+                                        exception
                                 );
                             }
                         });
 
             } catch (Exception exception) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Shutdown notification "
-                                + "failed: " + exception.getMessage()
+                log.error(
+                        "[TCPControlProcessor][informShutdown] Shutdown notification failed"
+                                + " | correlationId=" + expired.correlationId(),
+                        exception
                 );
             }
         }
@@ -1645,8 +2144,8 @@ public class TCPControlProcessor
         pendingPeerConnections.clear();
 
 
-        FileLogger.log(
-                "[TCPControlProcessor] Shutdown cleanup completed."
+        log.info(
+                "[TCPControlProcessor][informShutdown] TCP control processor shutdown cleanup completed"
         );
     }
 
@@ -1659,15 +2158,20 @@ public class TCPControlProcessor
             return;
         }
 
+        log.debug(
+                "[TCPControlProcessor][onConnectionClosed] Connection closure notification received"
+        );
+
         // Remove every active peer mapping using this connection.
         activePeerConnections.forEach((peerId, connection) -> {
 
             if (connection == closedConnection &&
                     activePeerConnections.remove(peerId, connection)) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Removed disconnected peer: "
-                                + peerId
+                log.info(() ->
+                        "[TCPControlProcessor][onConnectionClosed] Removed disconnected peer"
+                                + " | peerId=" + peerId
+                                + " | activePeerConnections=" + activePeerConnections.size()
                 );
             }
         });
@@ -1679,9 +2183,10 @@ public class TCPControlProcessor
             if (pending.connection() == closedConnection &&
                     pendingPeerConnections.remove(peerId, pending)) {
 
-                FileLogger.log(
-                        "[TCPControlProcessor] Removed pending handshake: "
-                                + peerId
+                log.debug(() ->
+                        "[TCPControlProcessor][onConnectionClosed] Removed pending handshake"
+                                + " | peerId=" + peerId
+                                + " | pendingPeerConnections=" + pendingPeerConnections.size()
                 );
             }
         });

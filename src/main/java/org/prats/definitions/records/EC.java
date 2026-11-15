@@ -6,6 +6,8 @@ import java.util.List;
 public record EC(
         String id,
         String label,
+        String tcpBindHost,
+        String platformHost,
         int tcpPort,
         int tcpBacklog,
         int controlPort,

@@ -5,6 +5,8 @@ import java.util.List;
 public record Platform(
         String id,
         String label,
+        String tcpBindHost,
+        String controlBindHost,
         int tcpPort,
         int tcpBacklog,
         int controlPort,

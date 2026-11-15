@@ -15,16 +15,24 @@ public class InMemorySessionManager implements SessionManager {
 
     private final ConcurrentHashMap<UUID, Session> sessions;
     private final Duration sessionDuration;
+    private final java.util.function.BiPredicate<String, char[]> credentialVerifier;
 
     public InMemorySessionManager(Duration sessionDuration) {
+        this(sessionDuration, (username, password) -> false);
+    }
+
+    public InMemorySessionManager(Duration sessionDuration, java.util.function.BiPredicate<String, char[]> credentialVerifier) {
         this.sessions = new ConcurrentHashMap<>();
         this.sessionDuration = sessionDuration;
+        this.credentialVerifier = java.util.Objects.requireNonNull(credentialVerifier);
     }
 
     @Override
     public Session login(String username, char[] password) {
 
-        // here we need to verify is the user has an active user id and password or not.
+        if (!credentialVerifier.test(username, password)) throw new IllegalArgumentException("Invalid username or password");
+        sessions.entrySet().removeIf(entry -> entry.getValue().isExpired());
+        if (sessions.size() >= 10000) throw new IllegalStateException("Session capacity reached");
 
         UUID sessionId = UUID.randomUUID();
         Instant now = Instant.now();

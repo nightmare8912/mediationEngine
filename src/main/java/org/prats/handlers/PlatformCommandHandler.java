@@ -2,31 +2,65 @@ package org.prats.handlers;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import org.prats.definitions.classes.Message;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 import org.prats.parsers.CommandParser;
 import org.prats.definitions.interfaces.ServiceManager;
 
-
 public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
 
+    private static final EngineLogger log =
+            EngineLogger.getLogger(PlatformCommandHandler.class);
 
     private final PlatformControlHandler platformControlHandler;
+    private final org.prats.services.ExternalHealthMonitor externalHealthMonitor;
 
     public PlatformCommandHandler(
             ServiceManager serviceManager,
             CommandParser commandParser,
-            PlatformControlHandler platformControlHandler
+            PlatformControlHandler platformControlHandler,
+            org.prats.services.ExternalHealthMonitor externalHealthMonitor
     ) {
         super(serviceManager, commandParser);
-        this.platformControlHandler     = platformControlHandler;
+        this.platformControlHandler = platformControlHandler;
+        this.externalHealthMonitor = externalHealthMonitor;
+
+        log.debug(
+                "[PlatformCommandHandler][constructor] Platform command handler initialized"
+        );
     }
 
 
+    @Override
+    protected String commandHelp() {
+        return super.commandHelp() + """
+
+                ACCOUNTS (available on the platform connection)
+                  mng register <username> <password>  Create an active account.
+                  mng login <username> <password>     Log in on this connection.
+                  mng whoami                          Show the logged-in user.
+                  mng logout                          End this connection's session.
+                Passwords must contain 10–128 characters. Management commands require login.
+
+                PLATFORM EC COMMANDS
+                  mng health report <ec-id>      Show the latest EC heartbeat and service health.
+                  mng start ec <ec-id>           Start an EC through its watchdog.
+                  mng stop ec <ec-id>            Stop an EC through its watchdog.
+                  mng restart ec <ec-id>         Restart an EC through its watchdog.
+
+                Example: mng health report ec01
+                EC health reports show heartbeat age and flag stale or missing heartbeats.
+                """;
+    }
 
     @Override
     public Message handleCommand(Message command) {
 
         trace("ENTER", command);
+
+        log.debug(() ->
+                "[PlatformCommandHandler][handleCommand] Processing PLATFORM command"
+                        + " | correlationId=" + command.getCorrelationId()
+        );
 
         String plainCommand;
 
@@ -42,35 +76,64 @@ public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
                     .trim()
                     .replaceAll("\\s+", " ");
 
-            FileLogger.log(
-                    "[TRACE][PlatformCommandHandler][COMMAND_PARSED]"
+            log.debug(() ->
+                    "[PlatformCommandHandler][handleCommand] Command parsed and normalized"
                             + " | correlationId=" + command.getCorrelationId()
                             + " | command=" + plainCommand
             );
 
         } catch (JsonProcessingException e) {
 
-            FileLogger.log(
-                    "[TRACE][PlatformCommandHandler][PARSE_ERROR]"
-                            + " | correlationId=" + command.getCorrelationId()
-                            + " | error=" + e.getMessage()
+            log.error(
+                    "[PlatformCommandHandler][handleCommand] Command parsing failed"
+                            + " | correlationId=" + command.getCorrelationId(),
+                    e
             );
 
             return handleInvalid(command);
         }
 
-        // 2. Handle PLATFORM-specific EC lifecycle commands.
-        if (plainCommand.startsWith("stop ec ")) {
+        if (!plainCommand.startsWith("mng ")) {
+            return handleInvalid(command);
+        }
+        String managementCommand = plainCommand.substring(4);
+        if (managementCommand.startsWith("health report ")) {
+            String ecName = managementCommand.substring("health report ".length());
+            if (ecName.isBlank() || ecName.contains(" ")) {
+                return handleInvalid(command);
+            }
+            if (ecName.equals(org.prats.definitions.classes.ProcessContext.getProcessName())) {
+                return handleHealthReport(command);
+            }
+            log.info(() -> "[PlatformCommandHandler][handleCommand] EC health report requested"
+                    + " | ecName=" + ecName + " | correlationId=" + command.getCorrelationId());
+            return commandParser.createCommandResponse(command, externalHealthMonitor.healthReport(ecName));
+        }
 
-            String ecName = plainCommand
+        // 2. Handle PLATFORM-specific EC lifecycle commands.
+        if (managementCommand.startsWith("stop ec ")) {
+
+            String ecName = managementCommand
                     .substring("stop ec ".length())
                     .trim();
 
             if (ecName.isBlank()) {
+
+                log.warn(() ->
+                        "[PlatformCommandHandler][handleCommand] EC stop command rejected because EC name is blank"
+                                + " | correlationId=" + command.getCorrelationId()
+                );
+
                 return handleInvalid(command);
             }
 
             trace("ROUTING_TO_EC_STOP", command);
+
+            log.info(() ->
+                    "[PlatformCommandHandler][handleCommand] Routing EC stop operation"
+                            + " | ecName=" + ecName
+                            + " | correlationId=" + command.getCorrelationId()
+            );
 
             return platformControlHandler.handleECStop(
                     command,
@@ -78,17 +141,29 @@ public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
             );
         }
 
-        if (plainCommand.startsWith("start ec ")) {
+        if (managementCommand.startsWith("start ec ")) {
 
-            String ecName = plainCommand
+            String ecName = managementCommand
                     .substring("start ec ".length())
                     .trim();
 
             if (ecName.isBlank()) {
+
+                log.warn(() ->
+                        "[PlatformCommandHandler][handleCommand] EC start command rejected because EC name is blank"
+                                + " | correlationId=" + command.getCorrelationId()
+                );
+
                 return handleInvalid(command);
             }
 
             trace("ROUTING_TO_EC_START", command);
+
+            log.info(() ->
+                    "[PlatformCommandHandler][handleCommand] Routing EC start operation"
+                            + " | ecName=" + ecName
+                            + " | correlationId=" + command.getCorrelationId()
+            );
 
             return platformControlHandler.handleECStart(
                     command,
@@ -96,17 +171,29 @@ public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
             );
         }
 
-        if (plainCommand.startsWith("restart ec ")) {
+        if (managementCommand.startsWith("restart ec ")) {
 
-            String ecName = plainCommand
+            String ecName = managementCommand
                     .substring("restart ec ".length())
                     .trim();
 
             if (ecName.isBlank()) {
+
+                log.warn(() ->
+                        "[PlatformCommandHandler][handleCommand] EC restart command rejected because EC name is blank"
+                                + " | correlationId=" + command.getCorrelationId()
+                );
+
                 return handleInvalid(command);
             }
 
             trace("ROUTING_TO_EC_RESTART", command);
+
+            log.info(() ->
+                    "[PlatformCommandHandler][handleCommand] Routing EC restart operation"
+                            + " | ecName=" + ecName
+                            + " | correlationId=" + command.getCorrelationId()
+            );
 
             return platformControlHandler.handleECRestart(
                     command,
@@ -119,13 +206,18 @@ public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
 
             trace("DELEGATING_TO_PARENT", command);
 
+            log.debug(() ->
+                    "[PlatformCommandHandler][handleCommand] Delegating command to parent handler"
+                            + " | correlationId=" + command.getCorrelationId()
+                            + " | command=" + plainCommand
+            );
+
             Message response = super.handleCommand(command);
 
-            FileLogger.log(
-                    "[TRACE][PlatformCommandHandler][PARENT_RETURNED]"
+            log.debug(() ->
+                    "[PlatformCommandHandler][handleCommand] Parent handler returned"
                             + " | correlationId=" + command.getCorrelationId()
-                            + " | response="
-                            + (response == null ? "NULL" : "NOT NULL")
+                            + " | response=" + (response == null ? "NULL" : "NOT NULL")
                             + " | responseCorrelationId="
                             + (response == null
                             ? "null"
@@ -136,15 +228,13 @@ public class PlatformCommandHandler extends ExecutionContainerCommandHandler {
 
         } catch (RuntimeException exception) {
 
-            FileLogger.log(
-                    "[TRACE][PlatformCommandHandler][PARENT_EXCEPTION]"
-                            + " | correlationId=" + command.getCorrelationId()
-                            + " | exception=" + exception
+            log.error(
+                    "[PlatformCommandHandler][handleCommand] Parent handler threw an exception"
+                            + " | correlationId=" + command.getCorrelationId(),
+                    exception
             );
 
             throw exception;
         }
     }
-
-
 }

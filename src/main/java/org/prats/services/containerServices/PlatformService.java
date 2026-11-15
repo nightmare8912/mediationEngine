@@ -1,3 +1,4 @@
+
 package org.prats.services.containerServices;
 
 import org.prats.definitions.classes.Message;
@@ -6,7 +7,7 @@ import org.prats.definitions.records.ConsolidatedECConfig;
 import org.prats.definitions.records.ConsolidatedWatchdogConfig;
 import org.prats.definitions.records.Platform;
 import org.prats.handlers.PlatformCommandHandler;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 import org.prats.definitions.interfaces.ServiceRegistry;
 import org.prats.definitions.interfaces.ExecutionContainerManager;
 import org.prats.utilities.HealthReportAnalyzer;
@@ -32,6 +33,9 @@ import java.util.concurrent.TimeUnit;
 // it would send repeated periodic heart-beats to platform to check on its health, and would initiate a restart if the platform is unresponsive.
 public class PlatformService extends ContainerService implements ExecutionContainerManager {
 
+    private static final EngineLogger log =
+            EngineLogger.getLogger(PlatformService.class);
+
     private final Platform platform;
     private final ExternalHealthMonitor externalHealthMonitor;
     private PlatformCommandHandler platformCommandHandler;
@@ -56,6 +60,7 @@ public class PlatformService extends ContainerService implements ExecutionContai
             Map<String, ConsolidatedWatchdogConfig> ecWatchdogMap,
             Platform platform
     ) {
+
         super(
                 coreThreads,
                 maxThreads,
@@ -72,137 +77,312 @@ public class PlatformService extends ContainerService implements ExecutionContai
                 healthReportAnalyzer
         );
 
+        log.debug(() ->
+                "[PlatformService][constructor] Initializing platform service"
+                        + " | serviceName=" + serviceName
+                        + " | tcpPort=" + tcpPort
+                        + " | controlPort=" + controlPort
+                        + " | coreThreads=" + coreThreads
+                        + " | maxThreads=" + maxThreads
+                        + " | idleTimeout=" + idleTimeout
+                        + " | configuredECCount="
+                        + (configuredEC == null ? "null" : configuredEC.size())
+                        + " | watchdogMappingCount="
+                        + (ecWatchdogMap == null ? "null" : ecWatchdogMap.size())
+        );
+
         this.platform                       = platform;
         this.externalHealthMonitor          = externalHealthMonitor;
         this.ecWatchdogMap                  = ecWatchdogMap;
 
-        if (containerType != ContainerType.PLATFORM)
+        if (containerType != ContainerType.PLATFORM) {
+
+            log.error(
+                    "[PlatformService][constructor] Invalid container type for PlatformService"
+            );
+
             throw new IllegalArgumentException(
                     "Container type cannot be picked as EC for Platform config"
             );
+        }
+
+        log.info(() ->
+                "[PlatformService][constructor] Platform service initialized"
+                        + " | serviceName=" + serviceName
+                        + " | platformId="
+                        + (platform == null ? "null" : platform.id())
+                        + " | configuredECCount="
+                        + (configuredEC == null ? "null" : configuredEC.size())
+                        + " | watchdogMappingCount="
+                        + (ecWatchdogMap == null ? "null" : ecWatchdogMap.size())
+        );
     }
 
     public void setCommandHandler(PlatformCommandHandler platformCommandHandler) {
+
+        log.debug("[PlatformService][setCommandHandler] Configuring platform command handler");
+
         this.platformCommandHandler     = platformCommandHandler;
+
+        log.debug(() ->
+                "[PlatformService][setCommandHandler] Platform command handler configured"
+                        + " | handler="
+                        + (platformCommandHandler == null
+                        ? "null"
+                        : platformCommandHandler.getClass().getSimpleName())
+        );
     }
 
 
     @Override
     public void start() {
+
+        log.info(() ->
+                "[PlatformService][start] Starting platform service"
+                        + " | platformId="
+                        + (platform == null ? "null" : platform.id())
+        );
+
+        log.debug("[PlatformService][start] Starting parent container service");
+
         super.start();
+
+        log.info("[PlatformService][start] Parent container service started successfully");
+
+        log.debug("[PlatformService][start] Creating scheduled thread pool");
+
         scheduledThread = new ScheduledThreadPoolExecutor(1);
+
+        log.info("[PlatformService][start] Scheduled thread pool initialized");
+
         setScheduledJobs();
+
+        log.info("[PlatformService][start] Platform service startup completed");
     }
 
     @Override
     public void cleanup() {
 
+        log.debug("[PlatformService][cleanup] Cleanup invoked");
     }
 
     private void setScheduledJobs() {
+
+        log.debug("[PlatformService][setScheduledJobs] Initializing platform scheduled jobs");
+
         scheduleCleanupJobs();
         scheduleMonitoringJobs();
+
+        log.debug("[PlatformService][setScheduledJobs] Platform scheduled job initialization completed");
     }
 
     // scheduled jobs
     private void scheduleCleanupJobs() {
 
+        log.debug("[PlatformService][scheduleCleanupJobs] Cleanup job scheduling invoked");
     }
 
     private void scheduleMonitoringJobs() {
+
+        log.debug("[PlatformService][scheduleMonitoringJobs] Scheduling platform monitoring jobs");
+
         try {
+
+            log.debug("[PlatformService][scheduleMonitoringJobs] Scheduling health checker health evaluation"
+                    + " | initialDelay=30 seconds"
+                    + " | interval=60 seconds");
+
             scheduledThread.scheduleAtFixedRate(
-                    this::triggerHealthCheckerHealthCheck,
+                    () -> runMaintenance(this::triggerHealthCheckerHealthCheck),
                     30,
                     60,
                     TimeUnit.SECONDS
             );
+
+            log.info("[PlatformService][scheduleMonitoringJobs] Health checker monitoring scheduled successfully");
+
         } catch (Exception exception) {
-            FileLogger.log(
-                    "[PlatformService] Unable to start triggerHealthCheckerHealthCheck: " + exception.getMessage()
+
+            log.error(
+                    "[PlatformService][scheduleMonitoringJobs] Unable to start triggerHealthCheckerHealthCheck",
+                    exception
             );
         }
+
         try {
+
+            log.debug("[PlatformService][scheduleMonitoringJobs] Scheduling heartbeat verification"
+                    + " | initialDelay=60 seconds"
+                    + " | fixedDelay=15 seconds");
+
             // verifying the heartbeats we received
             scheduledThread.scheduleWithFixedDelay(
-                    this::triggerVerifyHeartbeats,
+                    () -> runMaintenance(this::triggerVerifyHeartbeats),
                     60,
                     15,
                     TimeUnit.SECONDS
             );
+
+            log.info("[PlatformService][scheduleMonitoringJobs] Heartbeat verification scheduled successfully");
+
         } catch (Exception exception) {
-            FileLogger.log(
-                    "[PlatformService] Unable to start verifyHeartbeats : " + exception.getMessage()
+
+            log.error(
+                    "[PlatformService][scheduleMonitoringJobs] Unable to start verifyHeartbeats",
+                    exception
             );
         }
+
+        log.debug("[PlatformService][scheduleMonitoringJobs] Monitoring job scheduling sequence completed");
     }
 
     private void triggerVerifyHeartbeats() {
+
+        log.debug("[PlatformService][triggerVerifyHeartbeats] Heartbeat verification trigger invoked");
+
+        log.debug("[PlatformService][triggerVerifyHeartbeats] Submitting heartbeat verification task");
+
         containerWorkers.submit(
                 externalHealthMonitor::verifyHeartbeats
         );
+
+        log.debug("[PlatformService][triggerVerifyHeartbeats] Heartbeat verification task submitted successfully");
     }
 
 
     @Override
     public void notifyMissingHeartbeat(ConsolidatedECConfig ecConfig) {
 
+        log.warn(() ->
+                "[PlatformService][notifyMissingHeartbeat] Missing heartbeat notification received"
+                        + " | ecId="
+                        + (ecConfig == null ? "null" : ecConfig.ecId())
+        );
     }
 
     private ConsolidatedWatchdogConfig getWatchdog(String ecId) {
-        return ecWatchdogMap.get(ecId);
+
+        log.debug(() ->
+                "[PlatformService][getWatchdog] Resolving WATCHDOG configuration"
+                        + " | ecId=" + ecId
+        );
+
+        ConsolidatedWatchdogConfig watchdogConfig =
+                ecWatchdogMap.get(ecId);
+
+        log.debug(() ->
+                "[PlatformService][getWatchdog] WATCHDOG configuration lookup completed"
+                        + " | ecId=" + ecId
+                        + " | found=" + (watchdogConfig != null)
+        );
+
+        return watchdogConfig;
     }
 
     @Override
     public void startEC(String ecId) {
 
+        log.debug(() ->
+                "[PlatformService][startEC] EC start operation invoked"
+                        + " | ecId=" + ecId
+        );
     }
 
     @Override
     public void stopEC(String ecId) {
 
+        log.debug(() ->
+                "[PlatformService][stopEC] EC stop operation invoked"
+                        + " | ecId=" + ecId
+        );
     }
 
     @Override
     public void restartEC(String ecId) {
 
+        log.debug(() ->
+                "[PlatformService][restartEC] EC restart operation invoked"
+                        + " | ecId=" + ecId
+        );
     }
 
 
     @Override
     public void onRequest(Message request) {
 
+        log.debug("[PlatformService][onRequest] Request handler invoked");
     }
 
     @Override
     public void onInfo(Message request) {
 
+        log.debug("[PlatformService][onInfo] Information handler invoked");
     }
 
     @Override
     public void onHeartbeat(Message heartbeat) {
-        submitToThreadPool(
-                ()-> externalHealthMonitor.register(heartbeat)
+
+        log.debug(() ->
+                "[PlatformService][onHeartbeat] Heartbeat received"
+                        + " | messageType="
+                        + (heartbeat == null
+                        ? "null"
+                        : heartbeat.getClass().getSimpleName())
         );
+
+        log.debug("[PlatformService][onHeartbeat] Submitting heartbeat registration task");
+
+        submitToThreadPool(
+                () -> {
+
+                    log.debug("[PlatformService][onHeartbeat] Heartbeat registration task started");
+
+                    externalHealthMonitor.register(heartbeat);
+
+                    log.debug("[PlatformService][onHeartbeat] Heartbeat registration completed");
+                }
+        );
+
+        log.debug("[PlatformService][onHeartbeat] Heartbeat registration task submitted");
     }
 
     @Override
     public void onResponse(Message response) {
 
+        log.debug("[PlatformService][onResponse] Response handler invoked");
     }
 
     @Override
     public void onTimeout(Message originalRequest) {
 
+        log.debug("[PlatformService][onTimeout] Timeout handler invoked");
     }
 
     @Override
     public void dispatchCommand(Message command) {
-        submitToThreadPool(
-                ()->
-                messageDispatcher.dispatchResponse(
-                        platformCommandHandler.handleCommand(command)
-                )
+
+        log.debug(() ->
+                "[PlatformService][dispatchCommand] Platform command received for asynchronous processing"
+                        + " | messageType="
+                        + (command == null
+                        ? "null"
+                        : command.getClass().getSimpleName())
         );
+
+        submitToThreadPool(
+                () -> {
+
+                    log.debug("[PlatformService][dispatchCommand] Command processing task started");
+
+                    Message response = platformCommandHandler.handleCommand(command);
+                    if (response != null) {
+                        messageDispatcher.dispatchResponse(response);
+                    }
+
+                    log.debug("[PlatformService][dispatchCommand] Command response dispatched successfully");
+                }
+        );
+
+        log.debug("[PlatformService][dispatchCommand] Command processing task submitted");
     }
 }

@@ -6,7 +6,7 @@ import org.prats.definitions.classes.PendingDelivery;
 import org.prats.definitions.enums.HealthStatus;
 import org.prats.definitions.interfaces.HealthCheckable;
 import org.prats.definitions.records.HealthReport;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 import org.prats.registries.CorrelationRegistry;
 import org.prats.definitions.interfaces.ReplyChannel;
 import org.prats.registries.RetryRegistry;
@@ -45,6 +45,9 @@ import java.util.concurrent.locks.LockSupport;
 
 public class MessageService implements Service, MessageDispatcher, HealthCheckable {
 
+    private static final EngineLogger log =
+            EngineLogger.getLogger(MessageService.class);
+
     private final Object admissionLock;
     private final CorrelationRegistry correlationRegistry;
     private final RequestProcessor requestProcessor;
@@ -52,6 +55,7 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
     private final RetryRegistry retryRegistry;
 
     private ExecutorService messageWorker;
+    private ExecutorService responseWorker;
     private ScheduledExecutorService backgroundScheduler;
     private int coreThread;
     private int maxThread;
@@ -102,6 +106,17 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
             CorrelationRegistry correlationRegistry,
             RetryRegistry retryRegistry
     ) {
+
+        log.debug(() ->
+                "[MessageService][constructor] Initializing MessageService"
+                        + " | coreThread=" + coreThread
+                        + " | maxThread=" + maxThread
+                        + " | idleTimeout=" + idleTimeout
+                        + " | retryInterval=" + retryInterval
+                        + " | cleanupInterval=" + cleanupInterval
+                        + " | correlationTimeout=" + correlationTimeout
+        );
+
         this.coreThread             = coreThread;
         this.maxThread              = maxThread;
         this.idleTimeout            = idleTimeout;
@@ -118,27 +133,58 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
 
         this.requestProcessor       = requestProcessor;
         this.responseProcessor      = responseProcessor;
+
+        log.info("[MessageService][constructor] MessageService initialized");
     }
 
     @Override
     public void start() {
+
+        log.info("[MessageService][start] MessageService startup requested");
+
+        log.debug(() ->
+                "[MessageService][start] Initializing message worker executor"
+                        + " | coreThread=" + coreThread
+                        + " | maxThread=" + maxThread
+                        + " | idleTimeout=" + idleTimeout
+        );
+
         messageWorker = new ThreadPool().initializeAndGetThreadPool(
                 coreThread,
                 maxThread,
                 idleTimeout,
                 false
         );
+
+        log.info("[MessageService][start] Message worker executor initialized");
+        responseWorker = new ThreadPool().initializeAndGetThreadPool(coreThread, maxThread, idleTimeout, false);
+        log.info("[MessageService][start] Reserved response/maintenance admission pool initialized");
+
         isQuiescing = false;
+
+        log.debug("[MessageService][start] Message admission enabled");
+
         startBackgroundJobs();
+
+        log.info("[MessageService][start] MessageService startup completed");
     }
 
     private void startBackgroundJobs() {
+
+        log.info("[MessageService][startBackgroundJobs] Initializing background scheduler");
 
         backgroundScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "message-service-scheduler");
             thread.setDaemon(true);
             return thread;
         });
+
+        log.debug("[MessageService][startBackgroundJobs] Background scheduler initialized");
+
+        log.debug(() ->
+                "[MessageService][startBackgroundJobs] Scheduling retry job"
+                        + " | intervalSeconds=" + retryInterval
+        );
 
         backgroundScheduler.scheduleWithFixedDelay(
                 this::triggerRetryJob,
@@ -147,75 +193,188 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
                 TimeUnit.SECONDS
         );
 
+        log.info("[MessageService][startBackgroundJobs] Retry job scheduled successfully");
+
+        log.debug(() ->
+                "[MessageService][startBackgroundJobs] Scheduling correlation cleanup job"
+                        + " | intervalSeconds=" + cleanupInterval
+        );
+
         backgroundScheduler.scheduleWithFixedDelay(
                 this::triggerCorrelationCleanupJob,
                 cleanupInterval,
                 cleanupInterval,
                 TimeUnit.SECONDS
         );
+
+        log.info("[MessageService][startBackgroundJobs] Correlation cleanup job scheduled successfully");
+    }
+
+    public void releaseConnection(org.prats.definitions.classes.ClientConnection connection) {
+        correlationRegistry.removeForConnection(connection);
+        retryRegistry.removeForConnection(connection);
     }
 
     private void triggerRetryJob() {
 
+        log.debug("[MessageService][triggerRetryJob] Retry job trigger invoked");
+
         if (!retryJobQueued.compareAndSet(false, true)) {
+
+            log.debug("[MessageService][triggerRetryJob] Retry job already queued; skipping duplicate trigger");
+
             return;
         }
 
+        log.debug("[MessageService][triggerRetryJob] Retry job admitted");
+
         try {
+
             submitToThreadPool(() -> {
+
+                log.debug("[MessageService][triggerRetryJob] Retry worker task started");
+
                 try {
+
                     retryFailedResponses();
+
                 } finally {
+
                     retryJobQueued.set(false);
+
+                    log.debug("[MessageService][triggerRetryJob] Retry job queue flag reset");
                 }
+
             }, false);
 
+            log.debug("[MessageService][triggerRetryJob] Retry job submitted successfully");
+
         } catch (RejectedExecutionException exception) {
+
             retryJobQueued.set(false);
+
+            log.warn(() ->
+                    "[MessageService][triggerRetryJob] Retry job rejected by message executor"
+                            + " | exception=" + exception
+            );
         }
     }
 
 
     private void triggerCorrelationCleanupJob() {
 
+        log.debug("[MessageService][triggerCorrelationCleanupJob] Correlation cleanup trigger invoked");
+
         if (!cleanupJobQueued.compareAndSet(false, true)) {
+
+            log.debug("[MessageService][triggerCorrelationCleanupJob] Cleanup job already queued; skipping duplicate trigger");
+
             return;
         }
+
+        log.debug("[MessageService][triggerCorrelationCleanupJob] Cleanup job admitted");
+
         try {
+
             submitToThreadPool(() -> {
+
+                log.debug("[MessageService][triggerCorrelationCleanupJob] Cleanup worker task started");
+
                 try {
+
                     try {
+
                         cleanExpiredCorrelations();
+
                     } finally {
+
                         cleanExpiredPendingDeliveries();
                     }
+
                 } finally {
+
                     cleanupJobQueued.set(false);
+
+                    log.debug("[MessageService][triggerCorrelationCleanupJob] Cleanup job queue flag reset");
                 }
+
             }, false);
+
+            log.debug("[MessageService][triggerCorrelationCleanupJob] Cleanup job submitted successfully");
+
         } catch (RejectedExecutionException exception) {
 
             cleanupJobQueued.set(false);
+
+            log.warn(() ->
+                    "[MessageService][triggerCorrelationCleanupJob] Cleanup job rejected by message executor"
+                            + " | exception=" + exception
+            );
         }
     }
 
 
 
     private void retryFailedResponses() {
-        for (PendingDelivery pendingDelivery :
-                retryRegistry.getAllFailures()) {
+
+        log.debug("[MessageService][retryFailedResponses] Retrieving pending response failures");
+
+        List<PendingDelivery> pendingDeliveries =
+                retryRegistry.getAllFailures();
+
+        log.debug(() ->
+                "[MessageService][retryFailedResponses] Pending response failures retrieved"
+                        + " | pendingDeliveries=" + pendingDeliveries.size()
+        );
+
+        for (PendingDelivery pendingDelivery : pendingDeliveries) {
+
+            log.debug(() ->
+                    "[MessageService][retryFailedResponses] Processing pending response delivery"
+                            + " | correlationId=" + pendingDelivery.getCorrelationId()
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
+            );
+
             responseProcessor.retry(pendingDelivery);
+
+            log.debug(() ->
+                    "[MessageService][retryFailedResponses] Retry processing completed"
+                            + " | correlationId=" + pendingDelivery.getCorrelationId()
+            );
         }
     }
 
 
     private void cleanExpiredCorrelations() {
+
+        log.debug(() ->
+                "[MessageService][cleanExpiredCorrelations] Cleaning expired correlations"
+                        + " | correlationTimeout=" + correlationTimeout
+        );
+
         List<CorrelationRegistry.ExpiredCorrelation> expired =
                 correlationRegistry.removeExpired(correlationTimeout);
+
+        log.debug(() ->
+                "[MessageService][cleanExpiredCorrelations] Expired correlations retrieved"
+                        + " | expiredCount=" + expired.size()
+        );
+
         for (CorrelationRegistry.ExpiredCorrelation entry : expired) {
+
+            log.warn(() ->
+                    "[MessageService][cleanExpiredCorrelations] Processing expired correlation"
+                            + " | correlationId=" + entry.correlationId()
+            );
+
             responseProcessor.processExpiry(
                     entry.correlationId(),
                     entry.replyChannel()
+            );
+
+            log.debug(() ->
+                    "[MessageService][cleanExpiredCorrelations] Expired correlation processing completed"
+                            + " | correlationId=" + entry.correlationId()
             );
         }
     }
@@ -223,16 +382,22 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
 
     private void cleanExpiredPendingDeliveries() {
 
+        log.debug("[MessageService][cleanExpiredPendingDeliveries] Checking expired pending deliveries");
+
         List<PendingDelivery> expiredDeliveries =
                 retryRegistry.removeExpired();
 
+        log.debug(() ->
+                "[MessageService][cleanExpiredPendingDeliveries] Expired pending deliveries retrieved"
+                        + " | expiredCount=" + expiredDeliveries.size()
+        );
+
         for (PendingDelivery pendingDelivery : expiredDeliveries) {
 
-            FileLogger.log(
-                    "Pending response delivery expired: "
-                            + pendingDelivery.getCorrelationId()
-                            + " | Retry attempts: "
-                            + pendingDelivery.getRetryCount()
+            log.warn(() ->
+                    "[MessageService][cleanExpiredPendingDeliveries] Pending response delivery expired"
+                            + " | correlationId=" + pendingDelivery.getCorrelationId()
+                            + " | retryCount=" + pendingDelivery.getRetryCount()
             );
         }
     }
@@ -240,39 +405,88 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
 
     @Override
     public void shutdown() {
+
+        log.info("[MessageService][shutdown] MessageService shutdown requested");
+
         if (backgroundScheduler != null) {
+
+            log.debug("[MessageService][shutdown] Shutting down background scheduler");
+
             backgroundScheduler.shutdownNow();
+
+            log.info("[MessageService][shutdown] Background scheduler shutdown requested");
         }
-        messageWorker.shutdownNow();
+
+        log.debug("[MessageService][shutdown] Shutting down message worker executor");
+
+        if (messageWorker != null) messageWorker.shutdownNow();
+        if (responseWorker != null) responseWorker.shutdownNow();
+
+        log.info("[MessageService][shutdown] Message worker shutdown requested");
     }
 
     @Override
     public void quiesce() {
+
+        log.info("[MessageService][quiesce] MessageService quiescence requested");
+
         synchronized (admissionLock) {
+
             isQuiescing = true;
         }
+
+        log.debug("[MessageService][quiesce] Message admission disabled");
+
+        log.info("[MessageService][quiesce] MessageService is now quiescing");
     }
 
     @Override
     public void drain(long timeout) {
+
+        log.info(() ->
+                "[MessageService][drain] MessageService drain requested"
+                        + " | timeoutMillis=" + timeout
+                        + " | outstandingTasks=" + outstandingTasks.get()
+                        + " | correlationCount=" + correlationRegistry.getSize()
+        );
+
         // check for work completion for a certain period
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
+
         while (hasOutstandingWork()) {
+
             if (System.nanoTime() >= deadline) {
+
+                log.warn(() ->
+                        "[MessageService][drain] Drain deadline reached with outstanding work"
+                                + " | outstandingTasks=" + outstandingTasks.get()
+                                + " | correlationCount=" + correlationRegistry.getSize()
+                                + " | timeoutMillis=" + timeout
+                );
+
                 break;
             }
+
             LockSupport.parkNanos(
                     TimeUnit.MILLISECONDS.toNanos(100)
             );
         }
+
+        log.debug(() ->
+                "[MessageService][drain] Drain operation completed"
+                        + " | outstandingTasks=" + outstandingTasks.get()
+                        + " | correlationCount=" + correlationRegistry.getSize()
+        );
     }
 
     @Override
     public void cleanup() {
 
+        log.debug("[MessageService][cleanup] Cleanup invoked");
     }
 
     private boolean hasOutstandingWork() {
+
         return outstandingTasks.get() > 0 || correlationRegistry.getSize() > 0; // add the retry registry here too in future
     }
 
@@ -282,85 +496,217 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
             Message message,
             ReplyChannel replyChannel
     ) {
-        synchronized (admissionLock) {
-            if (isQuiescing) {
-                rejectedDuringQuiesce.incrementAndGet();
-                throw new RejectedExecutionException(
-                        "MessageService is quiescing"
-                );
+
+        log.debug("[MessageService][dispatchRequest] Request dispatch received");
+
+        try {
+            synchronized (admissionLock) {
+                if (isQuiescing) {
+                    rejectedDuringQuiesce.incrementAndGet();
+                    throw new RejectedExecutionException("MessageService is quiescing");
+                }
+                submitToThreadPool(() -> requestProcessor.process(message, replyChannel), true);
             }
-            // request forwarded to request processor
-            submitToThreadPool(
-                    () -> requestProcessor.process(
-                            message,
-                            replyChannel
-                    ),
-                    true
-            );
+        } catch (RejectedExecutionException exception) {
+            log.warn("[MessageService][dispatchRequest] Request rejected by admission control");
+            var payload = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+            payload.put("ok", false); payload.put("errorCode", "OVERLOADED");
+            payload.put("body", "Message service is busy or quiescing. Retry later.");
+            var operation = message.getOperation() == org.prats.definitions.enums.Operation.UNKNOWN
+                    ? org.prats.definitions.enums.Operation.COMMAND : message.getOperation();
+            Message rejected = new Message(org.prats.definitions.enums.MessageType.RESPONSE,
+                    org.prats.definitions.enums.ProcessType.PLATFORM, operation, payload,
+                    null, null, message.getCorrelationId());
+            rejected.setStatus("FAILED"); replyChannel.sendReply(rejected);
         }
+
+        log.debug("[MessageService][dispatchRequest] Request task submitted");
     }
 
     // handled by response processor
     @Override
     public void dispatchResponse(Message message) {
-        submitToThreadPool(
-                () -> responseProcessor.process(message),
-                false
-        );
+
+        log.debug("[MessageService][dispatchResponse] Response dispatch received");
+
+        try {
+            submitToThreadPool(() -> responseProcessor.process(message), false);
+        } catch (RejectedExecutionException exception) {
+            // Responses must free correlations even when request admission is saturated.
+            log.warn("[MessageService][dispatchResponse] Response pool saturated; completing response on caller");
+            responseProcessor.process(message);
+        }
+
+        log.debug("[MessageService][dispatchResponse] Response task submitted");
     }
 
     private void submitToThreadPool(Runnable runnable, boolean requestTask) {
+
+        log.debug(() ->
+                "[MessageService][submitToThreadPool] Preparing task submission"
+                        + " | requestTask=" + requestTask
+                        + " | activeTasks=" + activeTasks.get()
+                        + " | outstandingTasks=" + outstandingTasks.get()
+        );
+
         outstandingTasks.incrementAndGet();
         submittedTasks.incrementAndGet();
+
         if (requestTask) {
+
             submittedRequestTasks.incrementAndGet();
+
         } else {
+
             submittedResponseTasks.incrementAndGet();
         }
+
+        log.debug(() ->
+                "[MessageService][submitToThreadPool] Task counters incremented"
+                        + " | requestTask=" + requestTask
+                        + " | submittedTasks=" + submittedTasks.get()
+                        + " | submittedRequestTasks=" + submittedRequestTasks.get()
+                        + " | submittedResponseTasks=" + submittedResponseTasks.get()
+                        + " | outstandingTasks=" + outstandingTasks.get()
+        );
+
         try {
-            messageWorker.submit(() -> {
-                activeTasks.incrementAndGet();
+
+            (requestTask ? messageWorker : responseWorker).submit(() -> {
+
+                int currentActiveTasks = activeTasks.incrementAndGet();
+
+                log.debug(() ->
+                        "[MessageService][submitToThreadPool] Worker task started"
+                                + " | requestTask=" + requestTask
+                                + " | activeTasks=" + currentActiveTasks
+                                + " | outstandingTasks=" + outstandingTasks.get()
+                );
+
                 try {
+
                     runnable.run();
+
+                    log.debug("[MessageService][submitToThreadPool] Worker task execution completed");
+
                 } catch (Exception e) {
-                    failedTasks.incrementAndGet();
+
+                    long currentFailedTasks = failedTasks.incrementAndGet();
+
                     if (requestTask) {
-                        failedRequestTasks.incrementAndGet();
+
+                        long currentFailedRequestTasks = failedRequestTasks.incrementAndGet();
+
+                        log.error(
+                                "[MessageService][submitToThreadPool] Request task failed"
+                                        + " | failedTasks=" + currentFailedTasks
+                                        + " | failedRequestTasks=" + currentFailedRequestTasks,
+                                e
+                        );
+
                     } else {
-                        failedResponseTasks.incrementAndGet();
+
+                        long currentFailedResponseTasks = failedResponseTasks.incrementAndGet();
+
+                        log.error(
+                                "[MessageService][submitToThreadPool] Response task failed"
+                                        + " | failedTasks=" + currentFailedTasks
+                                        + " | failedResponseTasks=" + currentFailedResponseTasks,
+                                e
+                        );
                     }
+
                     throw e;
+
                 } finally {
-                    completedTasks.incrementAndGet();
-                    activeTasks.decrementAndGet();
-                    outstandingTasks.decrementAndGet();
+
+                    long currentCompletedTasks = completedTasks.incrementAndGet();
+
+                    int remainingActiveTasks = activeTasks.decrementAndGet();
+
+                    int remainingOutstandingTasks = outstandingTasks.decrementAndGet();
+
                     if (requestTask) {
-                        completedRequestTasks.incrementAndGet();
+
+                        long currentCompletedRequestTasks = completedRequestTasks.incrementAndGet();
+
+                        log.debug(() ->
+                                "[MessageService][submitToThreadPool] Request task counters updated"
+                                        + " | completedTasks=" + currentCompletedTasks
+                                        + " | completedRequestTasks=" + currentCompletedRequestTasks
+                                        + " | activeTasks=" + remainingActiveTasks
+                                        + " | outstandingTasks=" + remainingOutstandingTasks
+                        );
+
                     } else {
-                        completedResponseTasks.incrementAndGet();
+
+                        long currentCompletedResponseTasks = completedResponseTasks.incrementAndGet();
+
+                        log.debug(() ->
+                                "[MessageService][submitToThreadPool] Response task counters updated"
+                                        + " | completedTasks=" + currentCompletedTasks
+                                        + " | completedResponseTasks=" + currentCompletedResponseTasks
+                                        + " | activeTasks=" + remainingActiveTasks
+                                        + " | outstandingTasks=" + remainingOutstandingTasks
+                        );
                     }
                 }
             });
 
+            log.debug("[MessageService][submitToThreadPool] Task accepted by message worker executor");
+
         } catch (RejectedExecutionException e) {
+
             outstandingTasks.decrementAndGet();
             submittedTasks.decrementAndGet();
-            rejectedTasks.incrementAndGet();
+
+            long currentRejectedTasks = rejectedTasks.incrementAndGet();
+
             if (requestTask) {
+
+                long currentRejectedRequestTasks = rejectedRequestTasks.incrementAndGet();
+
                 submittedRequestTasks.decrementAndGet();
-                rejectedRequestTasks.incrementAndGet();
+
+                log.warn(() ->
+                        "[MessageService][submitToThreadPool] Request task rejected by executor"
+                                + " | rejectedTasks=" + currentRejectedTasks
+                                + " | rejectedRequestTasks=" + currentRejectedRequestTasks
+                                + " | outstandingTasks=" + outstandingTasks.get()
+                );
+
             } else {
+
+                long currentRejectedResponseTasks = rejectedResponseTasks.incrementAndGet();
+
                 submittedResponseTasks.decrementAndGet();
-                rejectedResponseTasks.incrementAndGet();
+
+                log.warn(() ->
+                        "[MessageService][submitToThreadPool] Response task rejected by executor"
+                                + " | rejectedTasks=" + currentRejectedTasks
+                                + " | rejectedResponseTasks=" + currentRejectedResponseTasks
+                                + " | outstandingTasks=" + outstandingTasks.get()
+                );
             }
+
             throw e;
         }
     }
 
+
     @Override
     public synchronized HealthReport checkHealth() {
 
+        log.debug("[MessageService][checkHealth] MessageService health check started");
+
         Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.putAll(org.prats.threading.ThreadPool.admissionMetrics(messageWorker));
+        metrics.put("responseAdmission", org.prats.threading.ThreadPool.admissionMetrics(responseWorker));
+        metrics.put("correlationEntries", correlationRegistry.getSize());
+        metrics.put("correlationLimit", correlationRegistry.capacity());
+        metrics.put("correlationRejections", correlationRegistry.rejectedCount());
+        metrics.put("retryEntries", retryRegistry.size());
+        metrics.put("retryRetainedBytes", retryRegistry.pendingBytes());
 
         metrics.put("isQuiescing", isQuiescing);
         metrics.put("executorInitialized", messageWorker != null);
@@ -387,6 +733,7 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
         metrics.put("retryResponseCount", retryRegistry != null);
 
         if (messageWorker != null) {
+
             metrics.put("executorShutdown", messageWorker.isShutdown());
             metrics.put("executorTerminated", messageWorker.isTerminated());
         }
@@ -395,11 +742,21 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
         String message;
 
         if (messageWorker == null) {
+
             status = HealthStatus.UNREACHABLE;
+
             message = "Message service has not been initialized.";
+
+            log.warn("[MessageService][checkHealth] Message service has not been initialized");
+
         } else if (messageWorker.isTerminated() || messageWorker.isShutdown()) {
+
             status = HealthStatus.UNHEALTHY;
+
             message = "Message worker executor is no longer operational.";
+
+            log.error("[MessageService][checkHealth] Message worker executor is no longer operational");
+
         } else {
 
             boolean newTaskFailures =
@@ -408,17 +765,47 @@ public class MessageService implements Service, MessageDispatcher, HealthCheckab
             boolean newTaskRejections =
                     rejectedTasks.get() > lastReportedRejectedTasks;
 
+            log.debug(() ->
+                    "[MessageService][checkHealth] Evaluating task failure and rejection counters"
+                            + " | newTaskFailures=" + newTaskFailures
+                            + " | newTaskRejections=" + newTaskRejections
+                            + " | failedTasks=" + failedTasks.get()
+                            + " | rejectedTasks=" + rejectedTasks.get()
+            );
+
             lastReportedFailedTasks = failedTasks.get();
             lastReportedRejectedTasks = rejectedTasks.get();
 
             if (newTaskFailures || newTaskRejections) {
+
                 status = HealthStatus.DEGRADED;
+
                 message = "Message service is operational but has experienced task failures or rejections.";
+
+                log.warn("[MessageService][checkHealth] Message service is operational but degraded due to task failures or rejections");
+
             } else {
+
                 status = HealthStatus.HEALTHY;
+
                 message = "Message service is operating normally.";
+
+                log.debug("[MessageService][checkHealth] Message service is healthy");
             }
         }
+
+        final HealthStatus finalStatus = status;
+
+        log.info(() ->
+                "[MessageService][checkHealth] MessageService health evaluation completed"
+                        + " | status=" + finalStatus
+                        + " | activeTasks=" + activeTasks.get()
+                        + " | outstandingTasks=" + outstandingTasks.get()
+                        + " | submittedTasks=" + submittedTasks.get()
+                        + " | completedTasks=" + completedTasks.get()
+                        + " | failedTasks=" + failedTasks.get()
+                        + " | rejectedTasks=" + rejectedTasks.get()
+        );
 
         return new HealthReport(
                 "MessageService",

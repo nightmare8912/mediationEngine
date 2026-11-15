@@ -82,11 +82,12 @@ public class WatchdogConfigParser {
             int platformControlPort
     ) {
 
-        String ecId = ecConfig.getString("id");
+        String ecId         = ecConfig.getString("id");
+        String ecHost       = ecConfig.getString("host");
 
-        int tcpPort = ecConfig.getInt("tcp-port");
+        int tcpPort         = ecConfig.getInt("tcp-port");
 
-        int startupOrder = ecConfig.getInt("startup-order");
+        int startupOrder    = ecConfig.getInt("startup-order");
 
         String ecConfigPath = resolveExistingFile(
                 ecConfig.getString("path"),
@@ -95,6 +96,7 @@ public class WatchdogConfigParser {
 
         return new ConsolidatedECConfig(
                 ecId,
+                ecHost,
                 tcpPort,
                 platformControlPort,
                 startupOrder,

@@ -1,4 +1,3 @@
-
 package org.prats.container.initializers;
 
 import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool;
@@ -40,7 +39,7 @@ import org.prats.services.tcpService.TCPService;
 import org.prats.utilities.ApplicationPaths;
 import org.prats.utilities.ContainerRuntime;
 import org.prats.utilities.HealthReportAnalyzer;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -63,7 +62,7 @@ public class PlatformInitializer {
             "container-conf"
     );
 
-    private static long HEART_BEAT_TTL = 3600L;
+    private static long HEART_BEAT_TTL = 45L;
 
     private Platform platformDefinition;
 
@@ -78,6 +77,9 @@ public class PlatformInitializer {
 
     private DatabaseService databaseService;
 
+    private static final EngineLogger log =
+            EngineLogger.getLogger(PlatformInitializer.class);
+
 
     private boolean initializationAttempted;
 
@@ -91,7 +93,16 @@ public class PlatformInitializer {
      */
     private Map<String, String> parseArguments(String[] args) {
 
+        log.debug(() ->
+                "[PlatformInitializer][parseArguments] Parsing PLATFORM JVM arguments"
+                        + " | argumentCount=" + (args == null ? "null" : args.length)
+        );
+
         if (args == null) {
+
+            log.warn(() ->
+                    "[PlatformInitializer][parseArguments] Argument array is null"
+            );
 
             throw new IllegalArgumentException(
                     "Platform arguments cannot be null"
@@ -105,6 +116,11 @@ public class PlatformInitializer {
             String argument = args[i];
 
             if (argument == null || !argument.startsWith("--")) {
+
+                log.warn(() ->
+                        "[PlatformInitializer][parseArguments] Invalid argument format"
+                                + " | argument=" + argument
+                );
 
                 throw new IllegalArgumentException(
                         "Invalid argument: " + argument
@@ -129,6 +145,11 @@ public class PlatformInitializer {
                 if (i + 1 >= args.length ||
                         args[i + 1].startsWith("--")) {
 
+                    log.warn(() ->
+                            "[PlatformInitializer][parseArguments] Argument value is missing"
+                                    + " | argument=" + key
+                    );
+
                     throw new IllegalArgumentException(
                             "Missing value for argument: --" + key
                     );
@@ -139,12 +160,22 @@ public class PlatformInitializer {
 
             if (!SUPPORTED_ARGUMENTS.contains(key)) {
 
+                log.warn(() ->
+                        "[PlatformInitializer][parseArguments] Unsupported argument supplied"
+                                + " | argument=" + key
+                );
+
                 throw new IllegalArgumentException(
                         "Unknown platform argument: --" + key
                 );
             }
 
             if (value == null || value.isBlank()) {
+
+                log.warn(() ->
+                        "[PlatformInitializer][parseArguments] Empty argument value supplied"
+                                + " | argument=" + key
+                );
 
                 throw new IllegalArgumentException(
                         "Empty value supplied for argument: --" + key
@@ -153,11 +184,21 @@ public class PlatformInitializer {
 
             if (parameters.putIfAbsent(key, value) != null) {
 
+                log.warn(() ->
+                        "[PlatformInitializer][parseArguments] Duplicate argument supplied"
+                                + " | argument=" + key
+                );
+
                 throw new IllegalArgumentException(
                         "Duplicate platform argument: --" + key
                 );
             }
         }
+
+        log.debug(() ->
+                "[PlatformInitializer][parseArguments] Argument parsing completed"
+                        + " | parsedArguments=" + parameters.keySet()
+        );
 
         return parameters;
     }
@@ -171,16 +212,33 @@ public class PlatformInitializer {
             String key
     ) {
 
+        log.debug(() ->
+                "[PlatformInitializer][required] Resolving mandatory argument"
+                        + " | argument=" + key
+        );
+
         String value = parameters.get(key);
 
         if (value == null || value.isBlank()) {
+
+            log.warn(() ->
+                    "[PlatformInitializer][required] Mandatory argument is missing"
+                            + " | argument=" + key
+            );
 
             throw new IllegalArgumentException(
                     "Missing required argument: --" + key
             );
         }
 
-        return value.trim();
+        String resolvedValue = value.trim();
+
+        log.debug(() ->
+                "[PlatformInitializer][required] Mandatory argument resolved"
+                        + " | argument=" + key
+        );
+
+        return resolvedValue;
     }
 
 
@@ -189,14 +247,29 @@ public class PlatformInitializer {
      */
     private Path resolveConfigPath(String configuredPath) {
 
+        log.debug(() ->
+                "[PlatformInitializer][resolveConfigPath] Resolving platform configuration path"
+                        + " | configuredPath=" + configuredPath
+        );
+
         Path path = ApplicationPaths.resolve(configuredPath);
 
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+            log.warn(() ->
+                    "[PlatformInitializer][resolveConfigPath] Platform configuration file is missing or unreadable"
+                            + " | resolvedPath=" + path
+            );
+
             throw new IllegalArgumentException(
                     "Configuration file does not exist or is not readable: "
                             + path
             );
         }
+
+        log.debug(() ->
+                "[PlatformInitializer][resolveConfigPath] Platform configuration path resolved"
+                        + " | resolvedPath=" + path
+        );
 
         return path;
     }
@@ -207,6 +280,11 @@ public class PlatformInitializer {
      * platform configuration file when necessary.
      */
     private Path resolveDatabaseConfigPath(String configuredPath) {
+
+        log.debug(() ->
+                "[PlatformInitializer][resolveDatabaseConfigPath] Resolving database configuration path"
+                        + " | configuredPath=" + configuredPath
+        );
 
         Objects.requireNonNull(
                 configuredPath,
@@ -222,14 +300,26 @@ public class PlatformInitializer {
 
         path = path.toAbsolutePath().normalize();
 
-        if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+        final Path resolvedDatabasePath = path;
+
+        if (!Files.isRegularFile(resolvedDatabasePath) || !Files.isReadable(resolvedDatabasePath)) {
+            log.warn(() ->
+                    "[PlatformInitializer][resolveDatabaseConfigPath] Database configuration file is missing or unreadable"
+                            + " | resolvedPath=" + resolvedDatabasePath
+            );
+
             throw new IllegalArgumentException(
                     "Database configuration does not exist or is not readable: "
-                            + path
+                            + resolvedDatabasePath
             );
         }
 
-        return path;
+        log.debug(() ->
+                "[PlatformInitializer][resolveDatabaseConfigPath] Database configuration path resolved"
+                        + " | resolvedPath=" + resolvedDatabasePath
+        );
+
+        return resolvedDatabasePath;
     }
 
 
@@ -242,10 +332,19 @@ public class PlatformInitializer {
      */
     private void initializeParameters(String[] args) {
 
+        log.info(() ->
+                "[PlatformInitializer][initializeParameters] Beginning PLATFORM configuration initialization"
+        );
+
         Map<String, String> parameters = parseArguments(args);
 
         platformConfigPath = resolveConfigPath(
                 required(parameters, "container-conf")
+        );
+
+        log.info(() ->
+                "[PlatformInitializer][initializeParameters] Loading platform definition"
+                        + " | platformConfigPath=" + platformConfigPath
         );
 
         platformDefinition = Objects.requireNonNull(
@@ -255,11 +354,25 @@ public class PlatformInitializer {
                 "Platform configuration parser returned null"
         );
 
+        log.debug(() ->
+                "[PlatformInitializer][initializeParameters] Platform definition loaded"
+                        + " | platformId=" + platformDefinition.id()
+                        + " | tcpPort=" + platformDefinition.tcpPort()
+                        + " | controlPort=" + platformDefinition.controlPort()
+                        + " | ecCount=" + platformDefinition.ecConfigs().size()
+                        + " | watchdogCount=" + platformDefinition.watchdogConfigs().size()
+        );
+
         if (parameters.containsKey("container-type")) {
 
             String suppliedType = parameters.get("container-type");
 
             if (!"PLATFORM".equalsIgnoreCase(suppliedType)) {
+
+                log.warn(() ->
+                        "[PlatformInitializer][initializeParameters] Supplied container type is not PLATFORM"
+                                + " | suppliedType=" + suppliedType
+                );
 
                 throw new IllegalArgumentException(
                         "PlatformInitializer can only initialize PLATFORM"
@@ -271,6 +384,12 @@ public class PlatformInitializer {
                 && !platformDefinition.id().equals(
                 parameters.get("container-name"))) {
 
+            log.warn(() ->
+                    "[PlatformInitializer][initializeParameters] Supplied container name does not match the platform configuration"
+                            + " | configuredPlatformId=" + platformDefinition.id()
+                            + " | suppliedContainerName=" + parameters.get("container-name")
+            );
+
             throw new IllegalArgumentException(
                     "Platform name does not match the configuration file"
             );
@@ -280,11 +399,18 @@ public class PlatformInitializer {
                 platformDefinition.databaseConfig()
         );
 
+        log.debug(() ->
+                "[PlatformInitializer][initializeParameters] Database configuration resolved"
+                        + " | databaseConfigPath=" + databaseConfigPath
+        );
+
         validatePlatformConfiguration();
 
-        FileLogger.log(
+        log.info(() ->
                 "[PlatformInitializer] Loaded platform configuration: "
                         + platformDefinition.id()
+                        + " | platformConfigPath=" + platformConfigPath
+                        + " | databaseConfigPath=" + databaseConfigPath
         );
     }
 
@@ -294,8 +420,17 @@ public class PlatformInitializer {
      */
     private void validatePlatformConfiguration() {
 
+        log.debug(() ->
+                "[PlatformInitializer][validatePlatformConfiguration] Validating platform configuration"
+                        + " | platformId=" + platformDefinition.id()
+        );
+
         if (platformDefinition.id() == null
                 || platformDefinition.id().isBlank()) {
+
+            log.warn(() ->
+                    "[PlatformInitializer][validatePlatformConfiguration] Platform ID is empty"
+            );
 
             throw new IllegalArgumentException(
                     "Platform ID cannot be empty"
@@ -305,6 +440,11 @@ public class PlatformInitializer {
         if (platformDefinition.tcpPort() < 1
                 || platformDefinition.tcpPort() > 65535) {
 
+            log.warn(() ->
+                    "[PlatformInitializer][validatePlatformConfiguration] Platform TCP port is outside the valid range"
+                            + " | tcpPort=" + platformDefinition.tcpPort()
+            );
+
             throw new IllegalArgumentException(
                     "Invalid platform TCP port"
             );
@@ -312,6 +452,11 @@ public class PlatformInitializer {
 
         if (platformDefinition.controlPort() < 1
                 || platformDefinition.controlPort() > 65535) {
+
+            log.warn(() ->
+                    "[PlatformInitializer][validatePlatformConfiguration] Platform control port is outside the valid range"
+                            + " | controlPort=" + platformDefinition.controlPort()
+            );
 
             throw new IllegalArgumentException(
                     "Invalid platform control port"
@@ -321,12 +466,23 @@ public class PlatformInitializer {
         if (platformDefinition.tcpPort()
                 == platformDefinition.controlPort()) {
 
+            log.warn(() ->
+                    "[PlatformInitializer][validatePlatformConfiguration] Application and control TCP ports are identical"
+                            + " | tcpPort=" + platformDefinition.tcpPort()
+                            + " | controlPort=" + platformDefinition.controlPort()
+            );
+
             throw new IllegalArgumentException(
                     "Platform TCP port and control port must be different"
             );
         }
 
         if (platformDefinition.tcpBacklog() < 1) {
+
+            log.warn(() ->
+                    "[PlatformInitializer][validatePlatformConfiguration] TCP backlog must be positive"
+                            + " | tcpBacklog=" + platformDefinition.tcpBacklog()
+            );
 
             throw new IllegalArgumentException(
                     "TCP backlog must be greater than zero"
@@ -338,6 +494,12 @@ public class PlatformInitializer {
                 || platformDefinition.coreThreads()
                 > platformDefinition.maxThreads()) {
 
+            log.warn(() ->
+                    "[PlatformInitializer][validatePlatformConfiguration] Platform thread configuration is invalid"
+                            + " | coreThreads=" + platformDefinition.coreThreads()
+                            + " | maxThreads=" + platformDefinition.maxThreads()
+            );
+
             throw new IllegalArgumentException(
                     "Invalid platform thread configuration"
             );
@@ -345,10 +507,26 @@ public class PlatformInitializer {
 
         if (platformDefinition.idleTimeout() < 0) {
 
+            log.warn(() ->
+                    "[PlatformInitializer][validatePlatformConfiguration] Platform idle timeout cannot be negative"
+                            + " | idleTimeout=" + platformDefinition.idleTimeout()
+            );
+
             throw new IllegalArgumentException(
                     "Idle timeout cannot be negative"
             );
         }
+
+        log.info(() ->
+                "[PlatformInitializer][validatePlatformConfiguration] Platform configuration validation completed"
+                        + " | platformId=" + platformDefinition.id()
+                        + " | tcpPort=" + platformDefinition.tcpPort()
+                        + " | controlPort=" + platformDefinition.controlPort()
+                        + " | tcpBacklog=" + platformDefinition.tcpBacklog()
+                        + " | coreThreads=" + platformDefinition.coreThreads()
+                        + " | maxThreads=" + platformDefinition.maxThreads()
+                        + " | idleTimeout=" + platformDefinition.idleTimeout()
+        );
     }
 
 
@@ -371,6 +549,16 @@ public class PlatformInitializer {
 
         String platformName = platformDefinition.id();
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Initializing PLATFORM dependencies"
+                        + " | platformId=" + platformName
+                        + " | tcpPort=" + tcpPort
+                        + " | controlPort=" + controlPort
+                        + " | coreThreads=" + coreThreads
+                        + " | maxThreads=" + maxThreads
+                        + " | idleTimeout=" + idleTimeout
+                        + " | databaseConfigPath=" + databaseConfigPath
+        );
 
         // -------------------------------------------------
         // 1. Registries
@@ -384,6 +572,12 @@ public class PlatformInitializer {
 
         serviceRegistry = new ContainerServiceRegistry();
 
+        log.debug(() ->
+                "[PlatformInitializer][initializePlatformServices] Registries initialized"
+                        + " | correlationRegistry=" + correlationRegistry.getClass().getSimpleName()
+                        + " | retryRegistry=" + retryRegistry.getClass().getSimpleName()
+                        + " | serviceRegistry=" + serviceRegistry.getClass().getSimpleName()
+        );
 
         // -------------------------------------------------
         // 2. Parsers
@@ -395,10 +589,19 @@ public class PlatformInitializer {
         CommandParser commandParser =
                 new CommandParser(processType);
 
+        log.debug(() ->
+                "[PlatformInitializer][initializePlatformServices] Message and command parsers initialized"
+                        + " | processType=" + processType
+        );
 
         // -------------------------------------------------
         // 3. Database infrastructure
         // -------------------------------------------------
+
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Initializing database infrastructure"
+                        + " | databaseConfigPath=" + databaseConfigPath
+        );
 
         HikariDBConnectionPool hikariDBConnectionPool =
                 new HikariDBConnectionPool();
@@ -426,6 +629,10 @@ public class PlatformInitializer {
         DatabaseForwarder databaseForwarder =
                 new DatabaseForwarder(databaseService);
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Database infrastructure initialized"
+                        + " | databaseService=" + databaseService.getClass().getSimpleName()
+        );
 
         // -------------------------------------------------
         // 4. Message processing
@@ -443,11 +650,8 @@ public class PlatformInitializer {
                         commandParser,
                         responseProcessor,
                         Set.of(
+                                "help",
                                 "status",
-                                "get health report",
-                                "start ec",
-                                "stop ec",
-                                "restart ec",
                                 "restart services all",
                                 "shutdown services all",
                                 "kill"
@@ -471,8 +675,8 @@ public class PlatformInitializer {
                         maxThreads,
                         idleTimeout,
                         5,
-                        600,
-                        600,
+                        5,
+                        60,
                         requestProcessor,
                         responseProcessor,
                         correlationRegistry,
@@ -481,6 +685,12 @@ public class PlatformInitializer {
 
         commandProcessor.setRequestProcessor(requestProcessor);
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Message-processing pipeline initialized"
+                        + " | messageService=" + messageService.getClass().getSimpleName()
+                        + " | requestProcessor=" + requestProcessor.getClass().getSimpleName()
+                        + " | responseProcessor=" + responseProcessor.getClass().getSimpleName()
+        );
 
         // -------------------------------------------------
         // 5. Health monitoring
@@ -496,6 +706,10 @@ public class PlatformInitializer {
         HealthReportAnalyzer healthReportAnalyzer =
                 new HealthReportAnalyzer();
 
+        log.debug(() ->
+                "[PlatformInitializer][initializePlatformServices] Health monitoring dependencies initialized"
+                        + " | healthService=" + healthService.getClass().getSimpleName()
+        );
 
         // -------------------------------------------------
         // 6. Heartbeat monitoring
@@ -513,6 +727,12 @@ public class PlatformInitializer {
                         messageParser
                 );
 
+        log.debug(() ->
+                "[PlatformInitializer][initializePlatformServices] Heartbeat monitoring initialized"
+                        + " | heartbeatTtlSeconds=" + HEART_BEAT_TTL
+                        + " | configuredECs=" + platformDefinition.ecConfigs().size()
+        );
+
         // -------------------------------------------------
         // 7. ECWatchdogMap
         // -------------------------------------------------
@@ -520,13 +740,36 @@ public class PlatformInitializer {
         Map<String, ConsolidatedWatchdogConfig> ecWatchdogMap =
                 new HashMap<>();
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Building EC-to-WATCHDOG ownership map"
+                        + " | watchdogCount=" + platformDefinition.watchdogConfigs().size()
+        );
+
         for (ConsolidatedWatchdogConfig watchdogConfig: platformDefinition.watchdogConfigs()) {
+
+            log.debug(() ->
+                    "[PlatformInitializer][initializePlatformServices] Loading WATCHDOG configuration"
+                            + " | watchdogId=" + watchdogConfig.id()
+                            + " | configPath=" + watchdogConfig.configPath()
+            );
 
             Watchdog watchdog   = new WatchdogConfigParser().initializeWatchdogConfig(watchdogConfig.configPath());
 
             List<ConsolidatedECConfig> ecConfigs = watchdog.ecConfigs();
 
+            log.debug(() ->
+                    "[PlatformInitializer][initializePlatformServices] WATCHDOG configuration loaded"
+                            + " | watchdogId=" + watchdogConfig.id()
+                            + " | ecCount=" + ecConfigs.size()
+            );
+
             for (ConsolidatedECConfig ecConfig: ecConfigs) {
+
+                log.debug(() ->
+                        "[PlatformInitializer][initializePlatformServices] Associating EC with WATCHDOG"
+                                + " | ecId=" + ecConfig.ecId()
+                                + " | watchdogId=" + watchdogConfig.id()
+                );
 
                 ecWatchdogMap.put(
                         ecConfig.ecId(),
@@ -535,9 +778,19 @@ public class PlatformInitializer {
             }
         }
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] EC-to-WATCHDOG ownership map completed"
+                        + " | mappedECCount=" + ecWatchdogMap.size()
+        );
+
         // -------------------------------------------------
         // 8. Platform service
         // -------------------------------------------------
+
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Initializing PlatformService"
+                        + " | platformId=" + platformName
+        );
 
         platformService =
                 new PlatformService(
@@ -558,6 +811,10 @@ public class PlatformInitializer {
                         platformDefinition
                 );
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] PlatformService initialized"
+                        + " | platformId=" + platformName
+        );
 
         // -------------------------------------------------
         // 7. Platform command handling
@@ -573,13 +830,23 @@ public class PlatformInitializer {
                 new PlatformCommandHandler(
                         platformService,
                         commandParser,
-                        platformControlHandler
+                        platformControlHandler,
+                        externalHealthMonitor
                 );
 
         CommandForwarder commandForwarder =
                 new CommandForwarder(platformService);
 
         messageProcessor.setCommandForwarder(commandForwarder);
+
+        org.prats.security.UserAccountService userAccounts =
+                new org.prats.security.UserAccountService(databaseResourceManager);
+        org.prats.handlers.GUIHandler guiHandler = new org.prats.handlers.GUIHandler(
+                userAccounts, messageParser, commandProcessor,
+                () -> platformDefinition.ecConfigs().stream().map(ConsolidatedECConfig::ecId).toList());
+        org.prats.services.guiService.GUIService guiService =
+                new org.prats.services.guiService.GUIService(guiHandler, messageService);
+        messageProcessor.setGUIForwarder(new org.prats.forwarders.GUIForwarder(guiService));
 
         platformService.setCommandHandler(
                 platformCommandHandler
@@ -589,39 +856,59 @@ public class PlatformInitializer {
                 messageService
         );
 
+        log.debug(() ->
+                "[PlatformInitializer][initializePlatformServices] Platform command handling configured"
+                        + " | commandHandler=" + platformCommandHandler.getClass().getSimpleName()
+                        + " | messageDispatcher=" + messageService.getClass().getSimpleName()
+        );
 
         // -------------------------------------------------
         // 8. TCP processors
         // -------------------------------------------------
 
-//        TCPApplicationProcessor tcpApplicationProcessor =
-//                new TCPApplicationProcessor(
-//                        messageService,
-//                        messageParser
-//                );
-//
-//        TCPControlProcessor tcpControlProcessor =
-//                new TCPControlProcessor(
-//                        platformService,
-//                        messageParser
-//                );
+        TCPApplicationProcessor tcpApplicationProcessor =
+                new TCPApplicationProcessor(
+                        List.of(),
+                        messageService,
+                        messageParser
+                );
+        tcpApplicationProcessor.setUserAccountService(userAccounts);
 
 
         List<TCPPeer> tcpPeers =
                 new ArrayList<>();
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Building TCP peer definitions"
+                        + " | ecCount=" + platformDefinition.ecConfigs().size()
+                        + " | watchdogCount=" + platformDefinition.watchdogConfigs().size()
+        );
 
         for(ConsolidatedECConfig ecConfig: platformDefinition.ecConfigs()) {
+            log.debug(() ->
+                    "[PlatformInitializer][initializePlatformServices] Adding EC TCP peer"
+                            + " | ecId=" + ecConfig.ecId()
+                            + " | host=" + ecConfig.host()
+                            + " | tcpPort=" + ecConfig.tcpPort()
+            );
+
             tcpPeers.add(
                     new TCPPeer(
                             ecConfig.ecId(),
-                            "127.0.0.1",
+                            ecConfig.host(),
                             ecConfig.tcpPort()
                     )
             );
         }
 
         for(ConsolidatedWatchdogConfig watchdogConfig: platformDefinition.watchdogConfigs()) {
+            log.debug(() ->
+                    "[PlatformInitializer][initializePlatformServices] Adding WATCHDOG TCP peer"
+                            + " | watchdogId=" + watchdogConfig.id()
+                            + " | host=" + watchdogConfig.host()
+                            + " | controlPort=" + watchdogConfig.controlPort()
+            );
+
             tcpPeers.add(
                     new TCPPeer(
                             watchdogConfig.id(),
@@ -639,78 +926,54 @@ public class PlatformInitializer {
         );
 
 
-        TCPApplicationProcessor TCPApplicationProcessor
-                = new TCPApplicationProcessor(
-                tcpPeers,
-                messageService,
-                messageParser
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] TCP processor initialized"
+                        + " | peerCount=" + tcpPeers.size()
+                        + " | controlProcessor=" + TCPControlProcessor.getClass().getSimpleName()
         );
 
-
         // -------------------------------------------------
-        // 9. Normal TCP service
+        // 9. TCP Control service
         //
-        // User/application communication.
+        // Container/watchdog communication and management
         // -------------------------------------------------
 
-//        tcpService =
-//                new TCPService(
-//                        coreThreads,
-//                        maxThreads,
-//                        idleTimeout,
-//                        tcpPort,
-//                        tcpBacklog,
-//                        platformName,
-//                        tcpPeers,
-//                        tcpApplicationProcessor,
-//                        TCPConnectionMode.SERVER_AND_PEERS,
-//                        tcpControlProcessor
-//                );
 
-        TCPService TCPService
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Initializing control TCP service"
+                        + " | port=" + controlPort
+                        + " | backlog=" + tcpBacklog
+        );
+
+        TCPService newTCPApplicationService
                 = new TCPService(
                 coreThreads,
                 maxThreads,
                 idleTimeout,
+                platformDefinition.tcpBindHost(),
                 tcpPort,
                 tcpBacklog,
                 true,
-                TCPApplicationProcessor
-
+                tcpApplicationProcessor
         );
-
-
-        // -------------------------------------------------
-        // 10. Control TCP service
-        //
-        // Watchdog connections.
-        // -------------------------------------------------
-
-//        tcpControlService =
-//                new TCPService(
-//                        coreThreads,
-//                        maxThreads,
-//                        idleTimeout,
-//                        controlPort,
-//                        tcpBacklog,
-//                        platformName + "-CONTROL",
-//                        tcpPeers,
-//                        tcpApplicationProcessor,
-//                        TCPConnectionMode.SERVER_ONLY,
-//                        tcpControlProcessor
-//                );
 
         TCPService newTCPControlService
                 = new TCPService(
                 coreThreads,
                 maxThreads,
                 idleTimeout,
+                platformDefinition.controlBindHost(),
                 controlPort,
                 tcpBacklog,
                 true,
                 TCPControlProcessor
         );
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] control TCP service initialized"
+                        + " | applicationPort=" + tcpPort
+                        + " | controlPort=" + controlPort
+        );
 
         // -------------------------------------------------
         // 11. Dependency injection
@@ -734,10 +997,29 @@ public class PlatformInitializer {
                 messageService
         );
 
+        tcpApplicationProcessor.setTcpService(newTCPApplicationService);
         TCPControlProcessor.setTcpService(newTCPControlService);
         TCPControlProcessor.setControlMessageHandler(platformService);
+        org.prats.handlers.JVMDiagnosticsHandler localDiagnostics = new org.prats.handlers.JVMDiagnosticsHandler(
+                messageParser,
+                () -> serviceRegistry.getAllServices().stream().filter(TCPService.class::isInstance).map(TCPService.class::cast).toList(),
+                () -> healthService.getConsolidatedHealthReport().overallStatus());
+        localDiagnostics.setRegistryMetrics(() -> Map.of("correlations", correlationRegistry.getSize(),
+                "correlationLimit", correlationRegistry.capacity(), "correlationRejections", correlationRegistry.rejectedCount()));
+        localDiagnostics.setServiceMetrics(() -> healthService.getConsolidatedHealthReport().services());
+        Map<String, String> diagnosticTargets = new LinkedHashMap<>();
+        diagnosticTargets.put(platformDefinition.id(), "PLATFORM");
+        platformDefinition.ecConfigs().forEach(ec -> diagnosticTargets.put(ec.ecId(), "EC"));
+        platformDefinition.watchdogConfigs().forEach(watchdog -> diagnosticTargets.put(watchdog.id(), "WATCHDOG"));
+        guiHandler.setDiagnostics(new org.prats.handlers.PlatformDiagnostics(platformDefinition.id(), diagnosticTargets,
+                TCPControlProcessor, messageParser, localDiagnostics));
 
-        TCPApplicationProcessor.setTcpService(TCPService);
+
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] Dependency injection completed"
+                        + " | databaseDispatcher=" + messageService.getClass().getSimpleName()
+                        + " | platformControlCommunicator=" + TCPControlProcessor.getClass().getSimpleName()
+        );
 
         // -------------------------------------------------
         // 12. Service registration
@@ -746,10 +1028,11 @@ public class PlatformInitializer {
         serviceRegistry.registerService(databaseService);
 
         serviceRegistry.registerService(messageService);
+        serviceRegistry.registerService(guiService);
 
         serviceRegistry.registerService(
                 "application-tcp",
-                TCPService
+                newTCPApplicationService
         );
 
         serviceRegistry.registerService(
@@ -759,8 +1042,12 @@ public class PlatformInitializer {
 
         serviceRegistry.registerService(healthService);
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatformServices] PLATFORM service registration completed"
+                        + " | registeredServices=[databaseService, messageService, application-tcp, control-tcp, healthService]"
+        );
 
-        FileLogger.log(
+        log.info(() ->
                 "[PlatformInitializer] Platform dependencies initialized."
         );
     }
@@ -771,7 +1058,16 @@ public class PlatformInitializer {
      */
     private void initializePlatform(String[] args) {
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatform] PLATFORM JVM initialization requested"
+                        + " | initializationAttempted=" + initializationAttempted
+        );
+
         if (initializationAttempted) {
+
+            log.warn(() ->
+                    "[PlatformInitializer][initializePlatform] Initialization has already been attempted"
+            );
 
             throw new IllegalStateException(
                     "PlatformInitializer cannot be initialized more than once"
@@ -782,9 +1078,24 @@ public class PlatformInitializer {
 
         initializeParameters(args);
 
+        log.info(() ->
+                "[PlatformInitializer][initializePlatform] Initializing process context"
+                        + " | platformId=" + platformDefinition.id()
+        );
+
         ProcessContext.initialize(platformDefinition.id());
 
+        log.debug(() ->
+                "[PlatformInitializer][initializePlatform] Process context initialized"
+                        + " | platformId=" + platformDefinition.id()
+        );
+
         initializePlatformServices();
+
+        log.info(() ->
+                "[PlatformInitializer][initializePlatform] PLATFORM JVM dependencies are initialized"
+                        + " | platformId=" + platformDefinition.id()
+        );
     }
 
 
@@ -793,20 +1104,32 @@ public class PlatformInitializer {
      */
     public void startPlatform() {
 
+        log.info(() ->
+                "[PlatformInitializer][startPlatform] PLATFORM startup requested"
+                        + " | platformServiceInitialized=" + (platformService != null)
+                        + " | platformId=" + (platformDefinition == null ? "unavailable" : platformDefinition.id())
+        );
+
         Objects.requireNonNull(
                 platformService,
                 "PlatformService has not been initialized"
         );
 
-        FileLogger.log(
+        log.info(() ->
                 "[PlatformInitializer] Starting PLATFORM: "
                         + platformDefinition.id()
         );
 
+        log.debug(() ->
+                "[PlatformInitializer][startPlatform] Invoking PlatformService.start()"
+                        + " | platformId=" + platformDefinition.id()
+        );
+
         platformService.start();
 
-        FileLogger.log(
+        log.info(() ->
                 "[PlatformInitializer] PLATFORM startup completed."
+                        + " | platformId=" + platformDefinition.id()
         );
     }
 
@@ -816,12 +1139,25 @@ public class PlatformInitializer {
      */
     public static void main(String[] args) {
 
+        log.info(() ->
+                "[PlatformInitializer][main] PLATFORM JVM entry point invoked"
+                        + " | argumentCount=" + (args == null ? "null" : args.length)
+        );
+
         ContainerRuntime.initialize();
+
+        log.debug(() ->
+                "[PlatformInitializer][main] Container runtime initialized"
+        );
 
         try {
 
             PlatformInitializer initializer =
                     new PlatformInitializer();
+
+            log.debug(() ->
+                    "[PlatformInitializer][main] PlatformInitializer instance created"
+            );
 
             initializer.initializePlatform(args);
 
@@ -829,9 +1165,9 @@ public class PlatformInitializer {
 
         } catch (Exception exception) {
 
-            FileLogger.log(
-                    "[PlatformInitializer] Fatal initialization failure: "
-                            + exception
+            log.error(
+                    "[PlatformInitializer] Fatal initialization failure",
+                    exception
             );
 
 //            exception.printStackTrace();

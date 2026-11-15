@@ -1,8 +1,8 @@
-
 package org.prats.registries;
 
 import org.prats.definitions.records.ContainerHeartbeat;
 import org.prats.definitions.enums.HealthStatus;
+import org.prats.loggers.EngineLogger;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -16,6 +16,9 @@ import java.util.concurrent.ConcurrentMap;
 
 public final class HeartbeatRegistry {
 
+    private static final EngineLogger log =
+            EngineLogger.getLogger(HeartbeatRegistry.class);
+
     private static final int MAX_HEARTBEATS_PER_CONTAINER = 50;
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
@@ -27,6 +30,11 @@ public final class HeartbeatRegistry {
     public HeartbeatRegistry(long ttlSeconds) {
 
         if (ttlSeconds <= 0) {
+            log.warn(() ->
+                    "[HeartbeatRegistry][constructor] Invalid heartbeat TTL"
+                            + " | ttlSeconds=" + ttlSeconds
+            );
+
             throw new IllegalArgumentException(
                     "TTL must be greater than zero seconds"
             );
@@ -38,13 +46,24 @@ public final class HeartbeatRegistry {
                     NANOS_PER_SECOND
             );
         } catch (ArithmeticException e) {
+            log.error(
+                    "[HeartbeatRegistry][constructor] Heartbeat TTL is too large"
+                            + " | ttlSeconds=" + ttlSeconds,
+                    e
+            );
+
             throw new IllegalArgumentException(
                     "TTL is too large",
                     e
             );
         }
-    }
 
+        log.info(() ->
+                "[HeartbeatRegistry][constructor] Heartbeat registry initialized"
+                        + " | ttlSeconds=" + ttlSeconds
+                        + " | maxHeartbeatsPerContainer=" + MAX_HEARTBEATS_PER_CONTAINER
+        );
+    }
 
     public void register(
             String containerName,
@@ -55,6 +74,13 @@ public final class HeartbeatRegistry {
         Objects.requireNonNull(
                 healthStatus,
                 "Health status cannot be null"
+        );
+
+        log.debug(() ->
+                "[HeartbeatRegistry][register] Registering container heartbeat"
+                        + " | containerName=" + containerName
+                        + " | healthStatus=" + healthStatus
+                        + " | registeredContainers=" + heartbeatHistoryByContainer.size()
         );
 
         heartbeatHistoryByContainer.compute(
@@ -70,8 +96,14 @@ public final class HeartbeatRegistry {
                     return history;
                 }
         );
-    }
 
+        log.debug(() ->
+                "[HeartbeatRegistry][register] Container heartbeat registered"
+                        + " | containerName=" + containerName
+                        + " | healthStatus=" + healthStatus
+                        + " | registeredContainers=" + heartbeatHistoryByContainer.size()
+        );
+    }
 
     public Optional<ContainerHeartbeat> getLatestHeartbeat(
             String containerName
@@ -83,12 +115,24 @@ public final class HeartbeatRegistry {
                 heartbeatHistoryByContainer.get(containerName);
 
         if (history == null) {
+            log.debug(() ->
+                    "[HeartbeatRegistry][getLatestHeartbeat] No heartbeat history found"
+                            + " | containerName=" + containerName
+            );
+
             return Optional.empty();
         }
 
-        return history.getLatest();
-    }
+        Optional<ContainerHeartbeat> latest = history.getLatest();
 
+        log.debug(() ->
+                "[HeartbeatRegistry][getLatestHeartbeat] Latest heartbeat lookup completed"
+                        + " | containerName=" + containerName
+                        + " | heartbeatFound=" + latest.isPresent()
+        );
+
+        return latest;
+    }
 
     public List<ContainerHeartbeat> getHistory(
             String containerName
@@ -100,10 +144,23 @@ public final class HeartbeatRegistry {
                 heartbeatHistoryByContainer.get(containerName);
 
         if (history == null) {
+            log.debug(() ->
+                    "[HeartbeatRegistry][getHistory] No heartbeat history found"
+                            + " | containerName=" + containerName
+            );
+
             return List.of();
         }
 
-        return history.getSnapshot();
+        List<ContainerHeartbeat> snapshot = history.getSnapshot();
+
+        log.debug(() ->
+                "[HeartbeatRegistry][getHistory] Heartbeat history snapshot retrieved"
+                        + " | containerName=" + containerName
+                        + " | heartbeatCount=" + snapshot.size()
+        );
+
+        return snapshot;
     }
 
     public boolean isExpired(String containerName) {
@@ -114,16 +171,35 @@ public final class HeartbeatRegistry {
                 heartbeatHistoryByContainer.get(containerName);
 
         if (history == null) {
+            log.debug(() ->
+                    "[HeartbeatRegistry][isExpired] Container has no registered heartbeat history"
+                            + " | containerName=" + containerName
+                            + " | expired=true"
+            );
+
             return true;
         }
 
-        return history.isExpired(
+        boolean expired = history.isExpired(
                 System.nanoTime(),
                 ttlNanos
         );
+
+        log.debug(() ->
+                "[HeartbeatRegistry][isExpired] Heartbeat expiration check completed"
+                        + " | containerName=" + containerName
+                        + " | expired=" + expired
+        );
+
+        return expired;
     }
 
     public int cleanupExpiredHistory() {
+
+        log.debug(() ->
+                "[HeartbeatRegistry][cleanupExpiredHistory] Starting heartbeat history cleanup"
+                        + " | registeredContainers=" + heartbeatHistoryByContainer.size()
+        );
 
         long currentTimeNanos = System.nanoTime();
 
@@ -138,6 +214,14 @@ public final class HeartbeatRegistry {
             );
         }
 
+        final int cleanedRecords = removedRecords;
+
+        log.debug(() ->
+                "[HeartbeatRegistry][cleanupExpiredHistory] Heartbeat history cleanup completed"
+                        + " | removedRecords=" + cleanedRecords
+                        + " | registeredContainers=" + heartbeatHistoryByContainer.size()
+        );
+
         return removedRecords;
     }
 
@@ -145,7 +229,15 @@ public final class HeartbeatRegistry {
 
         validateContainerName(containerName);
 
-        heartbeatHistoryByContainer.remove(containerName);
+        ContainerHistory removedHistory =
+                heartbeatHistoryByContainer.remove(containerName);
+
+        log.debug(() ->
+                "[HeartbeatRegistry][removeContainer] Container heartbeat history removal completed"
+                        + " | containerName=" + containerName
+                        + " | historyFound=" + (removedHistory != null)
+                        + " | registeredContainers=" + heartbeatHistoryByContainer.size()
+        );
     }
 
     private static void validateContainerName(String containerName) {

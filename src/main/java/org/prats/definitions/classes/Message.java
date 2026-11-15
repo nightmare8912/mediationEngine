@@ -16,6 +16,13 @@ import java.util.UUID;
 public final class Message {
 
     private boolean responseComplete = true;
+    @JsonIgnore
+    private org.prats.security.ClientSessionContext clientSession;
+
+    @JsonIgnore
+    public org.prats.security.ClientSessionContext getClientSession() { return clientSession; }
+    @JsonIgnore
+    public void setClientSession(org.prats.security.ClientSessionContext session) { clientSession = session; }
 
     private final UUID messageId;
     private UUID correlationId;

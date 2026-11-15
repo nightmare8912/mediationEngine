@@ -1,4 +1,3 @@
-
 package org.prats.container.initializers;
 
 import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool;
@@ -19,6 +18,7 @@ import org.prats.forwarders.CommandForwarder;
 import org.prats.forwarders.DatabaseForwarder;
 
 import org.prats.handlers.DatabaseRequestHandler;
+import org.prats.handlers.ECControlHandler;
 import org.prats.handlers.ExecutionContainerCommandHandler;
 
 import org.prats.parsers.CommandParser;
@@ -38,8 +38,9 @@ import org.prats.services.containerServices.ExecutionContainerService;
 import org.prats.services.tcpService.TCPService;
 
 import org.prats.utilities.ContainerRuntime;
+import org.prats.utilities.ApplicationPaths;
 import org.prats.utilities.HealthReportAnalyzer;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,6 +49,9 @@ import java.nio.file.InvalidPathException;
 import java.util.*;
 
 public class ExecutionContainerInitializer {
+
+    private static final EngineLogger log =
+            EngineLogger.getLogger(ExecutionContainerInitializer.class);
 
     private static final Set<String> SUPPORTED_ARGUMENTS = Set.of(
             "tcp-port",
@@ -86,7 +90,17 @@ public class ExecutionContainerInitializer {
 
     private Map<String, String> parseArguments(String[] args) {
 
+        log.debug(() ->
+                "[ExecutionContainerInitializer][parseArguments] Parsing EC JVM arguments"
+                        + " | argumentCount=" + (args == null ? 0 : args.length)
+        );
+
         if (args == null) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][parseArguments] EC arguments cannot be null"
+            );
+
             throw new IllegalArgumentException(
                     "Execution container arguments cannot be null"
             );
@@ -99,6 +113,12 @@ public class ExecutionContainerInitializer {
             String argument = args[i];
 
             if (argument == null || !argument.startsWith("--")) {
+
+                log.warn(() ->
+                        "[ExecutionContainerInitializer][parseArguments] Invalid argument format"
+                                + " | argument=" + argument
+                );
+
                 throw new IllegalArgumentException(
                         "Invalid argument: " + argument
                 );
@@ -121,6 +141,11 @@ public class ExecutionContainerInitializer {
                 if (i + 1 >= args.length ||
                         args[i + 1].startsWith("--")) {
 
+                    log.warn(() ->
+                            "[ExecutionContainerInitializer][parseArguments] Missing argument value"
+                                    + " | argument=" + key
+                    );
+
                     throw new IllegalArgumentException(
                             "Missing value for argument: --" + key
                     );
@@ -130,23 +155,51 @@ public class ExecutionContainerInitializer {
             }
 
             if (!SUPPORTED_ARGUMENTS.contains(key)) {
+
+                log.warn(() ->
+                        "[ExecutionContainerInitializer][parseArguments] Unsupported argument supplied"
+                                + " | argument=" + key
+                );
+
                 throw new IllegalArgumentException(
                         "Unknown execution container argument: --" + key
                 );
             }
 
             if (value == null || value.isBlank()) {
+
+                log.warn(() ->
+                        "[ExecutionContainerInitializer][parseArguments] Empty argument value supplied"
+                                + " | argument=" + key
+                );
+
                 throw new IllegalArgumentException(
                         "Empty value supplied for argument: --" + key
                 );
             }
 
             if (parameters.putIfAbsent(key, value) != null) {
+
+                log.warn(() ->
+                        "[ExecutionContainerInitializer][parseArguments] Duplicate argument supplied"
+                                + " | argument=" + key
+                );
+
                 throw new IllegalArgumentException(
                         "Duplicate argument: --" + key
                 );
             }
+
+            log.debug(() ->
+                    "[ExecutionContainerInitializer][parseArguments] Argument parsed"
+                            + " | argument=" + key
+            );
         }
+
+        log.debug(() ->
+                "[ExecutionContainerInitializer][parseArguments] Argument parsing completed"
+                        + " | parsedArguments=" + parameters.size()
+        );
 
         return parameters;
     }
@@ -160,10 +213,21 @@ public class ExecutionContainerInitializer {
         String value = parameters.get(key);
 
         if (value == null || value.isBlank()) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][required] Required argument is missing"
+                            + " | argument=" + key
+            );
+
             throw new IllegalArgumentException(
                     "Missing required argument: --" + key
             );
         }
+
+        log.debug(() ->
+                "[ExecutionContainerInitializer][required] Required argument resolved"
+                        + " | argument=" + key
+        );
 
         return value.trim();
     }
@@ -178,9 +242,24 @@ public class ExecutionContainerInitializer {
 
         try {
 
-            return Integer.parseInt(value);
+            int parsedValue = Integer.parseInt(value);
+
+            log.debug(() ->
+                    "[ExecutionContainerInitializer][parseInteger] Integer argument parsed"
+                            + " | argument=" + key
+                            + " | value=" + parsedValue
+            );
+
+            return parsedValue;
 
         } catch (NumberFormatException exception) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][parseInteger] Invalid integer argument"
+                            + " | argument=" + key
+                            + " | value=" + value,
+                    exception
+            );
 
             throw new IllegalArgumentException(
                     "Invalid integer supplied for --" + key + ": " + value,
@@ -207,6 +286,12 @@ public class ExecutionContainerInitializer {
 
         } catch (RuntimeException exception) {
 
+            log.error(
+                    "[ExecutionContainerInitializer][resolveConfigPath] Invalid configuration path"
+                            + " | argument=" + key,
+                    exception
+            );
+
             throw new IllegalArgumentException(
                     "Invalid path supplied for --" + key,
                     exception
@@ -214,11 +299,24 @@ public class ExecutionContainerInitializer {
         }
 
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][resolveConfigPath] Configuration file does not exist or is not readable"
+                            + " | argument=" + key
+                            + " | path=" + path
+            );
+
             throw new IllegalArgumentException(
                     "Configuration file does not exist or is not readable: "
                             + path
             );
         }
+
+        log.debug(() ->
+                "[ExecutionContainerInitializer][resolveConfigPath] Configuration path resolved"
+                        + " | argument=" + key
+                        + " | path=" + path
+        );
 
         return path.toString();
     }
@@ -229,6 +327,10 @@ public class ExecutionContainerInitializer {
     // ---------------------------------------------------------
 
     private void setParametersFromArgs(String[] args) {
+
+        log.info(
+                "[ExecutionContainerInitializer][setParametersFromArgs] Initializing EC parameters"
+        );
 
         Map<String, String> parameters = parseArguments(args);
 
@@ -251,6 +353,12 @@ public class ExecutionContainerInitializer {
         );
 
         if (containerType != ContainerType.EC) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][setParametersFromArgs] Unsupported container type"
+                            + " | receivedType=" + containerType
+            );
+
             throw new IllegalArgumentException(
                     "ExecutionContainerInitializer only supports EC. "
                             + "Received: " + containerType
@@ -263,6 +371,17 @@ public class ExecutionContainerInitializer {
         );
 
         validateParameters();
+
+        log.info(() ->
+                "[ExecutionContainerInitializer][setParametersFromArgs] EC parameters initialized successfully"
+                        + " | containerName=" + containerName
+                        + " | tcpPort=" + tcpPort
+                        + " | controlPort=" + controlPort
+                        + " | tcpBacklog=" + tcpBacklog
+                        + " | coreThreads=" + coreThreads
+                        + " | maxThreads=" + maxThreads
+                        + " | idleTimeout=" + idleTimeout
+        );
     }
 
 
@@ -270,11 +389,24 @@ public class ExecutionContainerInitializer {
 
         try {
 
-            return ContainerType.valueOf(
+            ContainerType containerType = ContainerType.valueOf(
                     value.trim().toUpperCase(Locale.ROOT)
             );
 
+            log.debug(() ->
+                    "[ExecutionContainerInitializer][parseContainerType] Container type parsed"
+                            + " | containerType=" + containerType
+            );
+
+            return containerType;
+
         } catch (IllegalArgumentException exception) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][parseContainerType] Unsupported container type"
+                            + " | suppliedValue=" + value,
+                    exception
+            );
 
             throw new IllegalArgumentException(
                     "Unsupported container type: " + value,
@@ -286,59 +418,121 @@ public class ExecutionContainerInitializer {
 
     private void validateParameters() {
 
+        log.debug(
+                "[ExecutionContainerInitializer][validateParameters] Validating EC initialization parameters"
+        );
+
         if (tcpPort < 1 || tcpPort > 65535) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] Invalid TCP port"
+                            + " | tcpPort=" + tcpPort
+            );
+
             throw new IllegalArgumentException(
                     "TCP port must be between 1 and 65535"
             );
         }
 
         if (controlPort < 1 || controlPort > 65535) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] Invalid control port"
+                            + " | controlPort=" + controlPort
+            );
+
             throw new IllegalArgumentException(
                     "Control port must be between 1 and 65535"
             );
         }
 
         if (tcpPort == controlPort) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] TCP and control ports cannot be identical"
+                            + " | port=" + tcpPort
+            );
+
             throw new IllegalArgumentException(
                     "EC TCP port and control port must be different"
             );
         }
 
         if (tcpBacklog < 1) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] Invalid TCP backlog"
+                            + " | tcpBacklog=" + tcpBacklog
+            );
+
             throw new IllegalArgumentException(
                     "TCP backlog must be greater than zero"
             );
         }
 
         if (coreThreads < 0) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] Core thread count cannot be negative"
+                            + " | coreThreads=" + coreThreads
+            );
+
             throw new IllegalArgumentException(
                     "Core threads cannot be negative"
             );
         }
 
         if (maxThreads < 1) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] Maximum thread count is invalid"
+                            + " | maxThreads=" + maxThreads
+            );
+
             throw new IllegalArgumentException(
                     "Maximum threads must be greater than zero"
             );
         }
 
         if (coreThreads > maxThreads) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] Core threads exceed maximum threads"
+                            + " | coreThreads=" + coreThreads
+                            + " | maxThreads=" + maxThreads
+            );
+
             throw new IllegalArgumentException(
                     "Core threads cannot exceed maximum threads"
             );
         }
 
         if (idleTimeout < 0) {
+
+            log.warn(() ->
+                    "[ExecutionContainerInitializer][validateParameters] Idle timeout cannot be negative"
+                            + " | idleTimeout=" + idleTimeout
+            );
+
             throw new IllegalArgumentException(
                     "Idle timeout cannot be negative"
             );
         }
 
         if (containerName.isBlank()) {
+
+            log.warn(
+                    "[ExecutionContainerInitializer][validateParameters] Container name cannot be empty"
+            );
+
             throw new IllegalArgumentException(
                     "Execution container name cannot be empty"
             );
         }
+
+        log.debug(
+                "[ExecutionContainerInitializer][validateParameters] EC initialization parameters validated successfully"
+        );
     }
 
 
@@ -349,12 +543,29 @@ public class ExecutionContainerInitializer {
     private String resolveDatabaseConfigPath(EC ec) {
 
         if (!ec.databaseConfigured()) {
+
+            log.info(() ->
+                    "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Database support is not configured for EC"
+                            + " | ecId=" + ec.id()
+            );
+
             return null;
         }
+
+        log.debug(() ->
+                "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Resolving database configuration path"
+                        + " | ecId=" + ec.id()
+        );
 
         String configuredPath = ec.dbConfigPath();
 
         if (configuredPath == null || configuredPath.isBlank()) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Database is enabled but configuration path is missing"
+                            + " | ecId=" + ec.id()
+            );
+
             throw new IllegalArgumentException(
                     "Database is enabled but dbConfigPath is missing "
                             + "for EC: " + ec.id()
@@ -368,6 +579,12 @@ public class ExecutionContainerInitializer {
             databasePath = Path.of(configuredPath);
 
         } catch (InvalidPathException exception) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Invalid database configuration path"
+                            + " | ecId=" + ec.id(),
+                    exception
+            );
 
             throw new IllegalArgumentException(
                     "Invalid database configuration path for EC: "
@@ -389,14 +606,34 @@ public class ExecutionContainerInitializer {
                 .toAbsolutePath()
                 .normalize();
 
+        final Path resolvedDatabasePath = databasePath;
+
+        log.debug(() ->
+                "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Database configuration path resolved"
+                        + " | ecId=" + ec.id()
+                        + " | databaseConfigPath=" + resolvedDatabasePath
+        );
+
         if (!Files.isRegularFile(databasePath) ||
                 !Files.isReadable(databasePath)) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Database configuration file does not exist or is not readable"
+                            + " | ecId=" + ec.id()
+                            + " | databaseConfigPath=" + resolvedDatabasePath
+            );
 
             throw new IllegalArgumentException(
                     "Database configuration file does not exist "
                             + "or is not readable: " + databasePath
             );
         }
+
+        log.info(() ->
+                "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Database configuration validated"
+                        + " | ecId=" + ec.id()
+                        + " | databaseConfigPath=" + resolvedDatabasePath
+        );
 
         return databasePath.toString();
     }
@@ -408,6 +645,11 @@ public class ExecutionContainerInitializer {
 
     private void initializeServiceRegistryAndDependencies() {
 
+        log.info(() ->
+                "[ExecutionContainerInitializer][initializeServiceRegistryAndDependencies] Beginning EC dependency initialization"
+                        + " | containerName=" + containerName
+        );
+
         ProcessType processType = ProcessType.EC;
 
         ContainerType containerType = ContainerType.EC;
@@ -416,6 +658,10 @@ public class ExecutionContainerInitializer {
         // -----------------------------------------------------
         // 1. Parse EC configuration
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Parsing EC configuration"
+        );
 
         EC ec = Objects.requireNonNull(
                 new ECConfigParser()
@@ -430,6 +676,13 @@ public class ExecutionContainerInitializer {
                 )
         );
 
+        log.info(() ->
+                "[ExecutionContainerInitializer] EC configuration parsed successfully"
+                        + " | ecId=" + ec.id()
+                        + " | configuredExecutionContainers=" + configuredEC.size()
+                        + " | databaseConfigured=" + ec.databaseConfigured()
+        );
+
         // Database configuration belongs to the EC definition.
         // It is not a mandatory JVM argument.
 
@@ -440,6 +693,10 @@ public class ExecutionContainerInitializer {
         // 2. Registries
         // -----------------------------------------------------
 
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing registries"
+        );
+
         CorrelationRegistry correlationRegistry =
                 new CorrelationRegistry();
 
@@ -448,10 +705,18 @@ public class ExecutionContainerInitializer {
 
         serviceRegistry = new ContainerServiceRegistry();
 
+        log.debug(
+                "[ExecutionContainerInitializer] Correlation, retry and service registries initialized"
+        );
+
 
         // -----------------------------------------------------
         // 3. Parsers
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing parsers"
+        );
 
         MessageParser messageParser =
                 new MessageParser(processType);
@@ -459,10 +724,18 @@ public class ExecutionContainerInitializer {
         CommandParser commandParser =
                 new CommandParser(processType);
 
+        log.debug(
+                "[ExecutionContainerInitializer] Message and command parsers initialized"
+        );
+
 
         // -----------------------------------------------------
         // 4. Response processing
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing response processing"
+        );
 
         ResponseProcessor responseProcessor =
                 new ResponseProcessor(
@@ -471,23 +744,35 @@ public class ExecutionContainerInitializer {
                         retryRegistry
                 );
 
+        log.debug(
+                "[ExecutionContainerInitializer] Response processor initialized"
+        );
+
 
         // -----------------------------------------------------
         // 5. Command processing
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing command processing"
+        );
 
         CommandProcessor commandProcessor =
                 new CommandProcessor(
                         commandParser,
                         responseProcessor,
                         Set.of(
+                                "help",
                                 "status",
-                                "get health report",
                                 "restart services all",
                                 "shutdown services all",
                                 "kill"
                         )
                 );
+
+        log.debug(
+                "[ExecutionContainerInitializer] Command processor initialized"
+        );
 
 
         // -----------------------------------------------------
@@ -498,6 +783,11 @@ public class ExecutionContainerInitializer {
         DatabaseForwarder databaseForwarder = null;
 
         if (ec.databaseConfigured()) {
+
+            log.info(() ->
+                    "[ExecutionContainerInitializer] Initializing optional database infrastructure"
+                            + " | ecId=" + ec.id()
+            );
 
             HikariDBConnectionPool hikariDBConnectionPool =
                     new HikariDBConnectionPool();
@@ -524,6 +814,16 @@ public class ExecutionContainerInitializer {
 
             databaseForwarder =
                     new DatabaseForwarder(databaseService);
+
+            log.info(
+                    "[ExecutionContainerInitializer] Database infrastructure initialized"
+            );
+
+        } else {
+
+            log.info(
+                    "[ExecutionContainerInitializer] Database infrastructure skipped because database support is disabled"
+            );
         }
 
 
@@ -533,6 +833,10 @@ public class ExecutionContainerInitializer {
 
         // databaseForwarder is intentionally null for ECs
         // that do not have database support configured.
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing message processing"
+        );
 
         MessageProcessor messageProcessor =
                 new MessageProcessor(databaseForwarder);
@@ -551,8 +855,8 @@ public class ExecutionContainerInitializer {
                         maxThreads,
                         idleTimeout,
                         5,
-                        600,
-                        600,
+                        5,
+                        60,
                         requestProcessor,
                         responseProcessor,
                         correlationRegistry,
@@ -561,10 +865,18 @@ public class ExecutionContainerInitializer {
 
         commandProcessor.setRequestProcessor(requestProcessor);
 
+        log.info(
+                "[ExecutionContainerInitializer] Message processing initialized"
+        );
+
 
         // -----------------------------------------------------
         // 8. Service registry and health monitoring
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing health monitoring"
+        );
 
         HealthService healthService =
                 new HealthService(
@@ -576,10 +888,24 @@ public class ExecutionContainerInitializer {
         HealthReportAnalyzer healthReportAnalyzer =
                 new HealthReportAnalyzer();
 
+        log.debug(
+                "[ExecutionContainerInitializer] Health monitoring dependencies initialized"
+        );
+
 
         // -----------------------------------------------------
         // 9. ExecutionContainerService
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing execution container service"
+        );
+
+        ECControlHandler ecControlHandler =
+                new ECControlHandler(
+                        healthService,
+                        messageParser
+                );
 
         executionContainerService =
                 new ExecutionContainerService(
@@ -596,88 +922,134 @@ public class ExecutionContainerInitializer {
                         serviceRegistry,
                         healthService,
                         healthReportAnalyzer,
-                        ec
+                        ecControlHandler
                 );
+
+        log.info(
+                "[ExecutionContainerInitializer] Execution container service initialized"
+        );
 
 
         // -----------------------------------------------------
         // 10. TCP processors
         // -----------------------------------------------------
 
-        List<TCPPeer> tcpPeers =
+        log.debug(
+                "[ExecutionContainerInitializer] Building configured TCP peer list"
+        );
+
+        List<TCPPeer> tcpApplicationPeers =
                 new ArrayList<>();
 
-        tcpPeers.add(
-                new TCPPeer(
-                    "PLATFORM",
-                    "127.0.0.1",
-                    ec.controlPort()
-                )
-        );
 
         for (ConsolidatedECConfig ecConfig : configuredEC) {
 
-            tcpPeers.add(
+            tcpApplicationPeers.add(
                     new TCPPeer(
                             ecConfig.ecId(),
-                            "127.0.0.1",
+                            ecConfig.host(),
                             ecConfig.tcpPort()
                     )
             );
         }
 
+        log.debug(() ->
+                "[ExecutionContainerInitializer] TCP application peer list constructed"
+                        + " | peerCount=" + tcpApplicationPeers.size()
+        );
+
+        List<TCPPeer> controlPeers = List.of(
+                new TCPPeer(
+                        "PLATFORM",
+                        ec.platformHost(),
+                        ec.controlPort()
+                )
+        );
+
+        log.debug(() ->
+                "[ExecutionContainerInitializer] TCP control list constructed"
+                        + " | peerCount=" + tcpApplicationPeers.size()
+        );
 
         TCPControlProcessor TCPControlProcessor =
                 new TCPControlProcessor(
                         TCPConnectionMode.CLIENT_ONLY,
-                        tcpPeers,
+                        controlPeers,
                         messageParser
                 );
 
 
         TCPApplicationProcessor TCPApplicationProcessor =
                 new TCPApplicationProcessor(
-                        tcpPeers,
+                        tcpApplicationPeers,
                         messageService,
                         messageParser
                 );
+
+        log.debug(
+                "[ExecutionContainerInitializer] TCP application and control processors initialized"
+        );
 
 
         // -----------------------------------------------------
         // 11. Main EC TCP service
         // -----------------------------------------------------
 
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing main EC TCP service"
+        );
+
         TCPService TCPService =
                 new TCPService(
                         coreThreads,
                         maxThreads,
                         idleTimeout,
+                        ec.tcpBindHost(),
                         tcpPort,
                         tcpBacklog,
                         true,
                         TCPApplicationProcessor
                 );
 
+        log.info(() ->
+                "[ExecutionContainerInitializer] Main EC TCP service initialized"
+                        + " | tcpPort=" + tcpPort
+        );
+
 
         // -----------------------------------------------------
         // 12. Control TCP service
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing control TCP service"
+        );
 
         TCPService newTCPControlService =
                 new TCPService(
                         coreThreads,
                         maxThreads,
                         idleTimeout,
+                        ec.tcpBindHost(),
                         controlPort,
                         tcpBacklog,
                         false,
                         TCPControlProcessor
                 );
 
+        log.info(() ->
+                "[ExecutionContainerInitializer] Control TCP service initialized"
+                        + " | controlPort=" + controlPort
+        );
+
 
         // -----------------------------------------------------
         // 13. Dependency injection
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Injecting service dependencies"
+        );
 
         // Database is optional. Only inject it when initialized.
 
@@ -704,6 +1076,16 @@ public class ExecutionContainerInitializer {
                 TCPControlProcessor
         );
 
+        ecControlHandler.setControlChannelCommunicator(TCPControlProcessor);
+        org.prats.handlers.JVMDiagnosticsHandler diagnostics = new org.prats.handlers.JVMDiagnosticsHandler(
+                messageParser,
+                () -> serviceRegistry.getAllServices().stream().filter(TCPService.class::isInstance).map(TCPService.class::cast).toList(),
+                () -> healthService.getConsolidatedHealthReport().overallStatus());
+        diagnostics.setRegistryMetrics(() -> Map.of("correlations", correlationRegistry.getSize(),
+                "correlationLimit", correlationRegistry.capacity(), "correlationRejections", correlationRegistry.rejectedCount()));
+        diagnostics.setServiceMetrics(() -> healthService.getConsolidatedHealthReport().services());
+        ecControlHandler.setDiagnostics(diagnostics);
+
         healthService.setServiceFailureReporter(
                 executionContainerService
         );
@@ -716,10 +1098,18 @@ public class ExecutionContainerInitializer {
 
         TCPApplicationProcessor.setTcpService(TCPService);
 
+        log.info(
+                "[ExecutionContainerInitializer] All EC service dependencies injected successfully"
+        );
+
 
         // -----------------------------------------------------
         // 14. Register EC services
         // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Registering EC services"
+        );
 
         if (databaseService != null) {
             serviceRegistry.registerService(databaseService);
@@ -739,13 +1129,15 @@ public class ExecutionContainerInitializer {
 
         serviceRegistry.registerService(healthService);
 
+        log.info(
+                "[ExecutionContainerInitializer] EC service registration completed"
+        );
 
-        FileLogger.log(
-                "[ExecutionContainerInitializer] "
-                        + "EC dependencies initialized: "
-                        + containerName
-                        + " | Database configured: "
-                        + ec.databaseConfigured()
+        log.info(() ->
+                "[ExecutionContainerInitializer] EC dependencies initialized"
+                        + " | containerName=" + containerName
+                        + " | registeredServices=" + serviceRegistry.getSize()
+                        + " | databaseConfigured=" + ec.databaseConfigured()
         );
     }
 
@@ -756,7 +1148,16 @@ public class ExecutionContainerInitializer {
 
     private void initializeExecutionContainer(String[] args) {
 
+        log.info(
+                "[ExecutionContainerInitializer][initializeExecutionContainer] EC initialization requested"
+        );
+
         if (initializationAttempted) {
+
+            log.error(
+                    "[ExecutionContainerInitializer][initializeExecutionContainer] Initialization rejected because it was already attempted"
+            );
+
             throw new IllegalStateException(
                     "ExecutionContainerInitializer cannot be initialized twice"
             );
@@ -766,9 +1167,24 @@ public class ExecutionContainerInitializer {
 
         setParametersFromArgs(args);
 
+        log.debug(() ->
+                "[ExecutionContainerInitializer][initializeExecutionContainer] Initializing process context"
+                        + " | containerName=" + containerName
+        );
+
         ProcessContext.initialize(containerName);
 
+        log.info(() ->
+                "[ExecutionContainerInitializer][initializeExecutionContainer] Process context initialized"
+                        + " | processName=" + ProcessContext.getProcessName()
+        );
+
         initializeServiceRegistryAndDependencies();
+
+        log.info(() ->
+                "[ExecutionContainerInitializer][initializeExecutionContainer] EC initialization completed"
+                        + " | containerName=" + containerName
+        );
     }
 
 
@@ -778,21 +1194,26 @@ public class ExecutionContainerInitializer {
 
     public void startExecutionContainer() {
 
+        log.info(() ->
+                "[ExecutionContainerInitializer][startExecutionContainer] EC startup requested"
+                        + " | containerName=" + containerName
+        );
+
         Objects.requireNonNull(
                 executionContainerService,
                 "ExecutionContainerService has not been initialized"
         );
 
-        FileLogger.log(
-                "[ExecutionContainerInitializer] Starting EC: "
-                        + containerName
+        log.info(() ->
+                "[ExecutionContainerInitializer][startExecutionContainer] Starting EC"
+                        + " | containerName=" + containerName
         );
 
         executionContainerService.start();
 
-        FileLogger.log(
-                "[ExecutionContainerInitializer] EC startup completed: "
-                        + containerName
+        log.info(() ->
+                "[ExecutionContainerInitializer][startExecutionContainer] EC startup completed"
+                        + " | containerName=" + containerName
         );
     }
 
@@ -802,6 +1223,11 @@ public class ExecutionContainerInitializer {
     // ---------------------------------------------------------
 
     public static void main(String[] args) {
+
+        log.info(() ->
+                "[ExecutionContainerInitializer][main] Execution container JVM entry point invoked"
+                        + " | argumentCount=" + (args == null ? 0 : args.length)
+        );
 
         ContainerRuntime.initialize();
 
@@ -814,12 +1240,22 @@ public class ExecutionContainerInitializer {
 
             initializer.startExecutionContainer();
 
+            org.prats.utilities.ECProcessIdentityStore identityStore =
+                    new org.prats.utilities.ECProcessIdentityStore(ApplicationPaths.getHome());
+            identityStore.write(ProcessContext.getProcessName(), ProcessHandle.current());
+            log.info("[ExecutionContainerInitializer][main] EC process identity persisted"
+                    + " | pid=" + ProcessHandle.current().pid()
+                    + " | identityFile=" + identityStore.path(ProcessContext.getProcessName()));
+
+            log.info(
+                    "[ExecutionContainerInitializer][main] Execution container startup sequence completed"
+            );
+
         } catch (Exception exception) {
 
-            FileLogger.log(
-                    "[ExecutionContainerInitializer] "
-                            + "Fatal initialization failure: "
-                            + exception
+            log.error(
+                    "[ExecutionContainerInitializer][main] Fatal initialization failure",
+                    exception
             );
 
             exception.printStackTrace();

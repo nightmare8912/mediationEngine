@@ -8,6 +8,7 @@ import org.prats.loggers.FileLogger;
 import java.util.concurrent.CompletionStage;
 
 public interface TCPProcessor {
+    default java.util.List<java.net.Socket> connectedSockets() { return java.util.List.of(); }
 
     // processes an incoming JSON.
     void processIncoming(

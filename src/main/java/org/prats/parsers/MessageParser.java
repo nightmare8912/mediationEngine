@@ -14,12 +14,16 @@ import org.prats.definitions.enums.MessageType;
 import org.prats.definitions.enums.Operation;
 import org.prats.definitions.enums.ProcessType;
 import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
 public class MessageParser {
+
+    private static final EngineLogger log =
+            EngineLogger.getLogger(MessageParser.class);
 
     private final ObjectMapper objectMapper;
     private final ProcessType processType;
@@ -63,10 +67,13 @@ public class MessageParser {
 
         } catch (JsonProcessingException jsonExe) {
 
-            FileLogger.log(
-                    "Error while parsing message: "
-                            + message + "\n"
-                            + jsonExe.getMessage()
+            // Plain text commands intentionally fall back to CommandProcessor.
+            // Treat decode failures as trace-level diagnostics, not file errors
+            // on every command request.
+            log.debug(() ->
+                    "[MessageParser][createMessageFromJSON] Input is not a JSON message; routing as command text"
+                            + " | messageLength=" + (message == null ? -1 : message.length())
+                            + " | cause=" + jsonExe.getClass().getSimpleName()
             );
 
             messageDefinition = new Message(
@@ -246,6 +253,27 @@ public class MessageParser {
                 null,
                 null
         );
+    }
+
+    public JsonNode convertToJsonNode(Object value) {
+
+        if (value == null) {
+            return NullNode.instance;
+        }
+
+        try {
+
+            return objectMapper.valueToTree(value);
+
+        } catch (IllegalArgumentException exception) {
+
+            FileLogger.log(
+                    "[convertToJsonNode] Serialization failed: "
+                            + exception.getMessage()
+            );
+
+            throw exception;
+        }
     }
 
     protected ObjectMapper getObjectMapper() {

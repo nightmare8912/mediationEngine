@@ -30,12 +30,18 @@ public class ThreadPool {
             long idleTimeout,
             boolean createPlatformThread
     ) {
+        ExecutorService delegate;
         if (createPlatformThread)
-            return initializeAndGetPlatformThreadPool(
+            delegate = initializeAndGetPlatformThreadPool(
                     coreThreads, maxThreads, idleTimeout
             );
         else
-            return initializeAndGetVirtualThreadPool();
+            delegate = initializeAndGetVirtualThreadPool();
 
+        return new AdmissionExecutor(delegate, Integer.getInteger("mediation.admission.max-tasks", 1024));
+
+    }
+    public static java.util.Map<String, Object> admissionMetrics(ExecutorService executor) {
+        return executor instanceof AdmissionExecutor bounded ? bounded.metrics() : java.util.Map.of();
     }
 }

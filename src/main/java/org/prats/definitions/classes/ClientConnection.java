@@ -8,6 +8,9 @@ import java.net.Socket;
 public class ClientConnection {
     private final Socket socket;
     private final BufferedWriter writer;
+    private final org.prats.security.ClientSessionContext sessionContext = new org.prats.security.ClientSessionContext();
+
+    public org.prats.security.ClientSessionContext getSessionContext() { return sessionContext; }
 
     public ClientConnection(Socket socket)
             throws IOException {

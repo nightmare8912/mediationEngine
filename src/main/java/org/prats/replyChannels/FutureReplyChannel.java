@@ -2,6 +2,7 @@ package org.prats.replyChannels;
 
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.interfaces.ReplyChannel;
+import org.prats.loggers.EngineLogger;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -9,6 +10,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
 public class FutureReplyChannel implements ReplyChannel {
+
+    private static final EngineLogger log =
+            EngineLogger.getLogger(FutureReplyChannel.class);
 
     private final CompletableFuture<Message> future;
 
@@ -20,6 +24,13 @@ public class FutureReplyChannel implements ReplyChannel {
     ) {
         this.future = Objects.requireNonNull(future);
         this.progressHandler = Objects.requireNonNull(progressHandler);
+
+        log.debug(() ->
+                "[FutureReplyChannel][constructor] Reply channel initialized"
+                        + " | futureDone=" + this.future.isDone()
+                        + " | progressHandler="
+                        + this.progressHandler.getClass().getName()
+        );
     }
 
     public FutureReplyChannel(CompletableFuture<Message> future) {
@@ -35,22 +46,53 @@ public class FutureReplyChannel implements ReplyChannel {
         Objects.requireNonNull(response);
 
         if (!response.isResponseComplete()) {
+
+            log.debug(
+                    "[FutureReplyChannel][sendReply] Progress response received; invoking progress handler"
+            );
+
             try {
-                return Objects.requireNonNull(
+                CompletionStage<Void> progressStage = Objects.requireNonNull(
                         progressHandler.apply(response)
                 );
-            } catch (RuntimeException e) {
-                return CompletableFuture.failedFuture(e);
+
+                log.debug(
+                        "[FutureReplyChannel][sendReply] Progress handler returned a completion stage"
+                );
+
+                return progressStage;
+
+            } catch (RuntimeException exception) {
+
+                log.error(
+                        "[FutureReplyChannel][sendReply] Progress handler failed",
+                        exception
+                );
+
+                return CompletableFuture.failedFuture(exception);
             }
         }
 
+        log.debug(
+                "[FutureReplyChannel][sendReply] Final response received; completing response future"
+        );
+
         if (!future.complete(response)) {
+
+            log.warn(
+                    "[FutureReplyChannel][sendReply] Unable to complete response future because it was already completed"
+            );
+
             return CompletableFuture.failedFuture(
                     new IllegalStateException(
                             "Future has already been completed"
                     )
             );
         }
+
+        log.debug(
+                "[FutureReplyChannel][sendReply] Response future completed successfully"
+        );
 
         return CompletableFuture.completedFuture(null);
     }

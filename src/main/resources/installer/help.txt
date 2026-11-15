@@ -1,27 +1,57 @@
-Welcome to the help menu.
+MEDIATION ENGINE - INSTALLER COMMANDS
 
-Here is a list of commands that you can use, with its purpose:
+    mng help
+        Display this help message.
+    mng validate
+        Validate the installation and configuration.
+    mng paths
+        Display installation paths.
+    mng start platform
+        Start the platform using its configured JVM settings.
+    mng start watchdog
+        Start the watchdog using its configured JVM settings.
+    mng exit
+        Exit the installer shell.
 
-    1. meng create user -u <username> -p <password>
-        Creates a new user in the system, after which they can login.
+If launchd already manages the platform and watchdog, use launchctl to manage
+those processes rather than starting duplicate instances from this shell.
 
-    2. meng drop user -u <username>
-        Drops the user from database, and they cannot login now
+PLATFORM COMMANDS (run on the platform TCP connection, port 15000)
 
-    3. meng help
-        Displays help message
+    mng help
+        Show runtime commands supported by the connected JVM.
+    mng register <username> <password>
+        Create an account (password: 10-128 characters).
+    mng login <username> <password>
+        Authenticate this connection before management commands.
+    mng whoami
+        Show the authenticated user.
+    mng logout
+        End the session.
+    mng health report platform
+        Show the platform's internal service health.
+    mng health report ec01
+        Show the latest heartbeat and service health for ec01.
+    mng start ec ec01
+        Start ec01 through its watchdog.
+    mng stop ec ec01
+        Stop ec01 through its watchdog.
+    mng restart ec ec01
+        Restart ec01 through its watchdog.
+    mng status
+        Show the connected JVM's status.
+    mng restart services all
+        Restart all internal services in the connected JVM.
+    mng shutdown services all
+        Shut down all internal services in the connected JVM.
+    mng kill
+        Terminate the connected JVM. launchd may restart a managed JVM.
 
-    4. meng exit
-        Exits the shell
+Replace ec01 with the configured EC ID. Keywords are case insensitive;
+EC IDs retain their configured case. Every management command requires the
+mng prefix.
 
-    5. meng initialize h2db
-        Initializes the internal H2 database
+On a direct EC TCP connection, use mng health report <that-ec-id> for its local
+health report. Status, service commands, and kill also apply to that EC.
 
-    6. meng shutdown h2db
-        Shuts down the connection pool of the internal database
-
-    7. meng start platform
-        Starts the platform on its configured TCP port
-
-    7. meng start watchdog
-            Starts the watchdog on its configured TCP Control port
+The installer shell and platform connection have separate command sets.

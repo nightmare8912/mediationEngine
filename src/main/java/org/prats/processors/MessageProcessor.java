@@ -1,22 +1,35 @@
-
 package org.prats.processors;
 
 import org.prats.definitions.classes.Message;
 import org.prats.definitions.interfaces.Forwarder;
 import org.prats.forwarders.CommandForwarder;
-import org.prats.loggers.FileLogger;
+import org.prats.loggers.EngineLogger;
 
 import java.util.Objects;
 
 public class MessageProcessor {
 
+    private static final EngineLogger log =
+            EngineLogger.getLogger(MessageProcessor.class);
+
     private final Forwarder databaseForwarder;
 
     private CommandForwarder commandForwarder;
+    private Forwarder guiForwarder;
+
+    public void setGUIForwarder(Forwarder forwarder) { this.guiForwarder = Objects.requireNonNull(forwarder); }
 
     public MessageProcessor(Forwarder databaseForwarder) {
         this.databaseForwarder =
                 databaseForwarder;
+
+        log.debug(() ->
+                "[MessageProcessor][constructor] Message processor initialized"
+                        + " | databaseForwarder="
+                        + (databaseForwarder == null
+                        ? "null"
+                        : databaseForwarder.getClass().getSimpleName())
+        );
     }
 
     public void setCommandForwarder(CommandForwarder commandForwarder) {
@@ -25,27 +38,57 @@ public class MessageProcessor {
                 commandForwarder,
                 "Command forwarder cannot be null"
         );
+
+        log.debug(() ->
+                "[MessageProcessor][setCommandForwarder] Command forwarder configured"
+                        + " | forwarderType="
+                        + commandForwarder.getClass().getSimpleName()
+        );
     }
 
     public void process(Message message) {
 
         switch (message.getOperation()) {
+            case GUI -> {
+                if (guiForwarder == null) throw new IllegalStateException("GUI requests are supported only by PLATFORM");
+                guiForwarder.forward(message);
+            }
 
-            case FETCH, SEARCH, CREATE, UPDATE, DELETE ->
-                    databaseForwarder.forward(message);
+            case FETCH, SEARCH, CREATE, UPDATE, DELETE -> {
+                log.debug(() ->
+                        "[MessageProcessor][process] Forwarding database operation"
+                                + " | operation=" + message.getOperation()
+                );
+
+                databaseForwarder.forward(message);
+
+                log.debug(() ->
+                        "[MessageProcessor][process] Database operation forwarded"
+                                + " | operation=" + message.getOperation()
+                );
+            }
 
             case COMMAND -> {
 
                 if (commandForwarder == null) {
-                    FileLogger.log(
-                            "[MessageProcessor] [process] Command forwarder has not been initialized"
+                    log.error(
+                            "[MessageProcessor][process] Command forwarder has not been initialized"
                     );
+
                     throw new IllegalStateException(
                             "Command forwarder has not been initialized"
                     );
                 }
 
+                log.debug(
+                        "[MessageProcessor][process] Forwarding command operation"
+                );
+
                 commandForwarder.forward(message);
+
+                log.debug(
+                        "[MessageProcessor][process] Command operation forwarded"
+                );
             }
         }
     }

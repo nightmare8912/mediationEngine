@@ -6,6 +6,10 @@ plugins {
 group = 'org.prats'
 version = '1.0-SNAPSHOT'
 
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+}
+
 repositories {
     mavenCentral()
 }
@@ -13,12 +17,34 @@ repositories {
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     implementation 'com.h2database:h2:2.5.252'
     implementation 'com.typesafe:config:1.4.3'
     implementation 'com.zaxxer:HikariCP:7.0.2'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.2'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.19.2'
     implementation 'org.apache.commons:commons-csv:1.14.1'
+    implementation 'ch.qos.logback:logback-classic:1.6.6'
+}
+
+sourceSets {
+    desktop {
+        java.srcDir 'src/desktop/java'
+    }
+}
+
+dependencies {
+    desktopImplementation 'com.fasterxml.jackson.core:jackson-databind:2.19.2'
+}
+
+tasks.register('desktopJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+    archiveBaseName.set('mediation-desktop')
+    archiveVersion.set('')
+    archiveClassifier.set('')
+    from sourceSets.desktop.output
+    configurations = [project.configurations.desktopRuntimeClasspath]
+    mergeServiceFiles()
+    manifest { attributes 'Main-Class': 'org.prats.desktop.DesktopApplication' }
 }
 
 tasks.named('shadowJar') {
@@ -43,4 +69,14 @@ tasks.register('printPlatformClasspath') {
 
 test {
     useJUnitPlatform()
+    useJUnitPlatform { excludeTags 'integration' }
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Run isolated platform/watchdog/EC TCP integration tests.'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform { includeTags 'integration' }
+    dependsOn tasks.named('shadowJar'), tasks.named('testClasses')
+    shouldRunAfter tasks.named('test')
 }

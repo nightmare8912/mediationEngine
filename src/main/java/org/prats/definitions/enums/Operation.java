@@ -17,6 +17,9 @@ public enum Operation {
     HANDSHAKE,
     AUTHENTICATE,
     COMMAND,
+    GUI,
+    DIAGNOSTICS,
+    RUN_GC,
 
     UNKNOWN
 }

@@ -1,7 +1,10 @@
 package org.prats.utilities;
 
 import org.prats.definitions.records.HealthReport;
+import org.prats.definitions.enums.HealthStatus;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -18,15 +21,15 @@ public class HealthReportFormatter {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'")
                     .withZone(ZoneOffset.UTC);
 
-    public String format(List<HealthReport> reports) {
-
-        if (reports == null || reports.isEmpty()) {
-            return "No health reports available.";
-        }
+    public String format(
+            List<HealthReport> reports,
+            String containerName,
+            Instant containerStartedAt
+    ) {
 
         Map<String, HealthReport> latestReports = new TreeMap<>();
 
-        for (HealthReport report : reports) {
+        for (HealthReport report : reports == null ? List.<HealthReport>of() : reports) {
             latestReports.merge(
                     report.serviceName(),
                     report,
@@ -38,21 +41,30 @@ public class HealthReportFormatter {
         }
 
         StringBuilder output = new StringBuilder();
+        Instant generatedAt = Instant.now();
 
-        appendCentered(output, "PLATFORM HEALTH REPORT");
+        appendCentered(output, "CONTAINER HEALTH REPORT");
+        output.append(String.format("Container : %s%n", safe(containerName)));
+        output.append(String.format("Started   : %s%n",
+                containerStartedAt == null ? "Unknown" : TIME_FORMAT.format(containerStartedAt)));
+        output.append(String.format("Uptime    : %s%n",
+                containerStartedAt == null ? "Unknown" : formatUptime(Math.max(0,
+                        Duration.between(containerStartedAt, generatedAt).getSeconds()))));
+        output.append(String.format("Generated : %s%n", TIME_FORMAT.format(generatedAt)));
         output.append(BORDER).append(NL);
 
-        long healthy = latestReports.values().stream()
-                .filter(report -> "HEALTHY".equals(
-                        String.valueOf(report.status())))
-                .count();
+        long healthy = countStatus(latestReports, HealthStatus.HEALTHY);
+        long degraded = countStatus(latestReports, HealthStatus.DEGRADED);
+        long unhealthy = countStatus(latestReports, HealthStatus.UNHEALTHY);
+        long unreachable = countStatus(latestReports, HealthStatus.UNREACHABLE);
+        long recoveryFailed = countStatus(latestReports, HealthStatus.RECOVERY_FAILED);
+        HealthStatus overallStatus = new HealthReportAnalyzer().aggregateServices(
+                new ArrayList<>(latestReports.values()));
 
         int total = latestReports.size();
-        int unhealthy = total - (int) healthy;
-
         output.append(String.format(
-                "Services: %d    Healthy: %d    Attention required: %d%n%n",
-                total, healthy, unhealthy
+                "Overall status: %s%nServices: %d    Healthy: %d    Degraded: %d    Unhealthy: %d    Unreachable: %d    Recovery failed: %d%n%n",
+                overallStatus, total, healthy, degraded, unhealthy, unreachable, recoveryFailed
         ));
 
         // Service overview
@@ -60,15 +72,19 @@ public class HealthReportFormatter {
         output.append(DIVIDER).append(NL);
 
         output.append(String.format(
-                "%-25s %-18s %s%n",
+                "%-28s %-16s %s%n",
                 "SERVICE", "STATUS", "DESCRIPTION"
         ));
 
         output.append(DIVIDER).append(NL);
 
+        if (latestReports.isEmpty()) {
+            output.append("No service health checks available.").append(NL);
+        }
+
         for (HealthReport report : latestReports.values()) {
             output.append(String.format(
-                    "%-25s %-18s %s%n",
+                    "%-28s %-16s %s%n",
                     report.serviceName(),
                     report.status(),
                     report.message()
@@ -129,6 +145,19 @@ public class HealthReportFormatter {
         return output.toString();
     }
 
+    private String safe(String value) {
+        return value == null || value.isBlank() ? "Unknown" : value;
+    }
+
+    private long countStatus(
+            Map<String, HealthReport> reports,
+            HealthStatus status
+    ) {
+        return reports.values().stream()
+                .filter(report -> report.status() == status)
+                .count();
+    }
+
     private void appendCentered(
             StringBuilder output,
             String title
@@ -145,12 +174,8 @@ public class HealthReportFormatter {
 
     private String formatMetricName(String metric) {
 
-        if (metric.equals("containerUptimeSeconds")) {
-            return "Container Uptime";
-        }
-
-        if (metric.equals("containerStartedAt")) {
-            return "Container Started At";
+        if (metric.equals("healthServiceUptimeSeconds")) {
+            return "Health Service Uptime";
         }
 
         String formatted = metric.replaceAll(
@@ -171,7 +196,8 @@ public class HealthReportFormatter {
             return booleanValue ? "Yes" : "No";
         }
 
-        if (metric.equals("containerUptimeSeconds")
+        if ((metric.equals("healthServiceUptimeSeconds")
+                || metric.equals("containerUptimeSeconds"))
                 && value instanceof Number number) {
 
             return formatUptime(number.longValue());

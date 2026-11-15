@@ -2,6 +2,7 @@ package org.prats.database.databaseUtilities.sqlHelper;
 
 import org.prats.definitions.records.Table;
 import org.prats.definitions.records.TableField;
+import org.prats.loggers.EngineLogger;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -9,7 +10,18 @@ import java.util.List;
 import java.util.Map;
 
 public class SQLSyntaxHelper {
+
+    private static final EngineLogger log =
+            EngineLogger.getLogger(SQLSyntaxHelper.class);
+
     public SQLQuery createTableStatementHelper(Table table) {
+
+        log.debug(() ->
+                "[SQLSyntaxHelper][createTableStatementHelper] Generating CREATE TABLE statement"
+                        + " | tableId=" + table.id()
+                        + " | fieldCount=" + table.numberOfFields()
+        );
+
         // empty sql
         StringBuilder sql = new StringBuilder();
         sql.append("CREATE TABLE IF NOT EXISTS ")
@@ -45,21 +57,52 @@ public class SQLSyntaxHelper {
 
         sql.append(")");
 
-        return new SQLQuery(sql.toString(), List.of());
+        SQLQuery sqlQuery = new SQLQuery(sql.toString(), List.of());
+
+        log.debug(() ->
+                "[SQLSyntaxHelper][createTableStatementHelper] CREATE TABLE statement generated"
+                        + " | tableId=" + table.id()
+                        + " | fieldCount=" + table.numberOfFields()
+                        + " | primaryKeyCount=" + primaryKeysList.size()
+        );
+
+        return sqlQuery;
     }
 
     public SQLQuery dropTableStatementHelper(Table table) {
+
+        log.debug(() ->
+                "[SQLSyntaxHelper][dropTableStatementHelper] Generating DROP TABLE statement"
+                        + " | tableId=" + table.id()
+        );
+
         // empty sql
         StringBuilder sql = new StringBuilder();
         sql.append("DROP TABLE IF EXISTS ")
                 .append(table.id());
-        return new SQLQuery(sql.toString(), List.of());
+
+        SQLQuery sqlQuery = new SQLQuery(sql.toString(), List.of());
+
+        log.debug(() ->
+                "[SQLSyntaxHelper][dropTableStatementHelper] DROP TABLE statement generated"
+                        + " | tableId=" + table.id()
+        );
+
+        return sqlQuery;
     }
 
     public SQLQuery insertTableStatementHelper(
             Table table,
             Map<String, String> record
     ) {
+
+        log.debug(() ->
+                "[SQLSyntaxHelper][insertTableStatementHelper] Generating INSERT statement"
+                        + " | tableId=" + table.id()
+                        + " | fieldCount=" + table.numberOfFields()
+                        + " | recordFieldCount=" + record.size()
+        );
+
         StringBuilder sql = new StringBuilder();
 
         List<Object> parameterList = new ArrayList<>();
@@ -80,6 +123,14 @@ public class SQLSyntaxHelper {
             parameterList.add(record.get(field.id()));
         }
 
-        return new SQLQuery(sql.toString(), parameterList);
+        SQLQuery sqlQuery = new SQLQuery(sql.toString(), parameterList);
+
+        log.debug(() ->
+                "[SQLSyntaxHelper][insertTableStatementHelper] INSERT statement generated"
+                        + " | tableId=" + table.id()
+                        + " | parameterCount=" + parameterList.size()
+        );
+
+        return sqlQuery;
     }
 }
