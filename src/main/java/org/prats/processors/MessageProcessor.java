@@ -55,16 +55,29 @@ public class MessageProcessor {
     public void process(Message message) {
 
         switch (message.getOperation()) {
+
             case AUTHENTICATE -> {
                 if (authenticationForwarder == null) throw new IllegalStateException("Authentication route unavailable");
                 authenticationForwarder.forward(message);
             }
+
             case DIAGNOSTICS, RUN_GC -> {
-                if (diagnosticsForwarder == null) throw new IllegalStateException("Diagnostics route unavailable");
+                if (diagnosticsForwarder == null) {
+                    log.warn(() ->
+                            "[MessageProcessor] [process]: Diagnostics route unavailable" + message
+                    );
+                    throw new IllegalStateException("Diagnostics route unavailable");
+                }
                 diagnosticsForwarder.forward(message);
             }
+
             case GUI -> {
-                if (guiForwarder == null) throw new IllegalStateException("GUI requests are supported only by PLATFORM");
+                if (guiForwarder == null) {
+                    log.warn(() ->
+                            "[MessageProcessor] [process]: GUI requests are supported only by PLATFORM" + message
+                    );
+                    throw new IllegalStateException("GUI requests are supported only by PLATFORM");
+                }
                 guiForwarder.forward(message);
             }
 

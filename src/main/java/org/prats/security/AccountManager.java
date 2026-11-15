@@ -1,33 +1,41 @@
+
 package org.prats.security;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import org.prats.definitions.classes.Message;
-import org.prats.definitions.enums.*;
+import org.prats.definitions.enums.MessageType;
+import org.prats.definitions.enums.Operation;
 import org.prats.definitions.interfaces.MessageDispatcher;
+import org.prats.loggers.EngineLogger;
 import org.prats.parsers.MessageParser;
 import org.prats.replyChannels.FutureReplyChannel;
-import com.fasterxml.jackson.databind.JsonNode;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import org.prats.loggers.EngineLogger;
 
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
-
 
 import java.time.Instant;
 
 import java.util.Base64;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
-/** Authentication policy and session state used only by AuthenticationHandler.
- * Storage operations use structured database messages; no JDBC is exposed here.
+/**
+ * Authentication policy and session state used only by AuthenticationHandler.
+ *
+ * Storage operations use structured database messages.
+ * No JDBC is exposed here.
  */
 public final class AccountManager {
 
@@ -46,6 +54,9 @@ public final class AccountManager {
             new ConcurrentHashMap<>();
 
 
+    // =========================================================
+    // 1. ACCOUNT RECORDS
+    // =========================================================
 
     public record AccountSession(
             String token,
@@ -60,30 +71,87 @@ public final class AccountManager {
     ) {
     }
 
-    public AccountManager(MessageDispatcher dispatcher, MessageParser parser) {
-        this.dispatcher = java.util.Objects.requireNonNull(dispatcher);
-        this.parser = java.util.Objects.requireNonNull(parser);
+
+    // =========================================================
+    // 2. CONSTRUCTOR
+    // =========================================================
+
+    public AccountManager(
+            MessageDispatcher dispatcher,
+            MessageParser parser
+    ) {
+
+        this.dispatcher = Objects.requireNonNull(dispatcher);
+        this.parser = Objects.requireNonNull(parser);
     }
 
-    private CompletableFuture<JsonNode> query(Operation operation, Map<String, ?> payload) {
+
+    // =========================================================
+    // 3. DATABASE QUERY DISPATCH
+    // =========================================================
+
+    private CompletableFuture<JsonNode> query(
+            Operation operation,
+            Map<String, ?> payload
+    ) {
+
         Message request = parser.createEmptyMessage();
+
         request.setMessageType(MessageType.REQUEST);
         request.setOperation(operation);
         request.setAccountDatabaseRequest(true);
-        request.setPayload(parser.convertToJsonNode(payload));
-        CompletableFuture<Message> result = new CompletableFuture<>();
-        try { dispatcher.dispatchRequest(request, new FutureReplyChannel(result)); }
-        catch (RuntimeException error) { result.completeExceptionally(error); }
-        return result.orTimeout(15, TimeUnit.SECONDS).thenApply(response -> {
-            JsonNode body = response.getPayload();
-            if (body == null || !body.path("ok").asBoolean(false)) {
-                if (body != null && "DUPLICATE_KEY".equals(body.path("errorCode").asText()))
-                    throw new IllegalArgumentException("That username is unavailable.");
-                throw new IllegalStateException("Account storage is unavailable.");
-            }
-            return body;
-        });
+
+        request.setPayload(
+                parser.convertToJsonNode(payload)
+        );
+
+        CompletableFuture<Message> result =
+                new CompletableFuture<>();
+
+        try {
+
+            dispatcher.dispatchRequest(
+                    request,
+                    new FutureReplyChannel(result)
+            );
+
+        } catch (RuntimeException error) {
+
+            result.completeExceptionally(error);
+        }
+
+        return result
+                .orTimeout(15, TimeUnit.SECONDS)
+                .thenApply(response -> {
+
+                    JsonNode body = response.getPayload();
+
+                    if (body == null
+                            || !body.path("ok").asBoolean(false)) {
+
+                        if (body != null
+                                && "DUPLICATE_KEY".equals(
+                                body.path("errorCode").asText()
+                        )) {
+
+                            throw new IllegalArgumentException(
+                                    "That username is unavailable."
+                            );
+                        }
+
+                        throw new IllegalStateException(
+                                "Account storage is unavailable."
+                        );
+                    }
+
+                    return body;
+                });
     }
+
+
+    // =========================================================
+    // 4. ACCOUNT REGISTRATION
+    // =========================================================
 
     /**
      * Registers a new account with a securely derived password hash.
@@ -113,7 +181,6 @@ public final class AccountManager {
             );
         }
 
-
         log.debug(() ->
                 "[AccountManager][register] Generating password hash"
                         + " | algorithm=PBKDF2WithHmacSHA256"
@@ -126,10 +193,23 @@ public final class AccountManager {
                 "[AccountManager][register] Password hash generated successfully"
         );
 
-        return query(Operation.CREATE, Map.of("entity", "users", "data",
-                Map.of("user_name", username, "password", hash, "active", "Y")))
-                .thenApply(ignored -> null);
+        return query(
+                Operation.CREATE,
+                Map.of(
+                        "entity", "users",
+                        "data", Map.of(
+                                "user_name", username,
+                                "password", hash,
+                                "active", "Y"
+                        )
+                )
+        ).thenApply(ignored -> null);
     }
+
+
+    // =========================================================
+    // 5. ACCOUNT LOGIN
+    // =========================================================
 
     /**
      * Authenticates an account and creates an expiring session.
@@ -166,9 +246,10 @@ public final class AccountManager {
         }
 
 
-        /*
-         * Check recent failed login attempts.
-         */
+        // -----------------------------------------------------
+        // 5.1. Check recent failed login attempts
+        // -----------------------------------------------------
+
         Attempts recent = attempts.get(username);
 
         if (recent != null
@@ -185,49 +266,108 @@ public final class AccountManager {
             );
         }
 
-        /*
-         * Retrieve stored credentials and account status.
-         */
+
+        // -----------------------------------------------------
+        // 5.2. Retrieve stored credentials and account status
+        // -----------------------------------------------------
+
         log.debug(() ->
                 "[AccountManager][login] Retrieving account credentials"
         );
 
-        return query(Operation.SEARCH, Map.of("entity", "users", "columns", List.of("password", "active"),
-                "filters", Map.of("user_name", Map.of("operator", "EQ", "value", username))))
-                .thenApply(response -> {
-                    JsonNode row = response.path("rows").path(0);
-                    String encoded = field(row, "password");
-                    String active = field(row, "active");
-                    return authenticate(username, password, encoded, active);
-                });
+        return query(
+                Operation.SEARCH,
+                Map.of(
+                        "entity", "users",
+
+                        "columns", List.of(
+                                "password",
+                                "active"
+                        ),
+
+                        "filters", Map.of(
+                                "user_name", Map.of(
+                                        "operator", "EQ",
+                                        "value", username
+                                )
+                        )
+                )
+        ).thenApply(response -> {
+
+            JsonNode row = response.path("rows").path(0);
+
+            String encoded = field(row, "password");
+            String active = field(row, "active");
+
+            return authenticate(
+                    username,
+                    password,
+                    encoded,
+                    active
+            );
+        });
     }
 
-    private static String field(JsonNode row, String name) {
+
+    // =========================================================
+    // 6. DATABASE FIELD EXTRACTION
+    // =========================================================
+
+    private static String field(
+            JsonNode row,
+            String name
+    ) {
+
         JsonNode value = row.get(name);
-        if (value == null) value = row.get(name.toUpperCase(java.util.Locale.ROOT));
-        return value == null || value.isNull() ? null : value.asText();
+
+        if (value == null) {
+
+            value = row.get(
+                    name.toUpperCase(Locale.ROOT)
+            );
+        }
+
+        return value == null || value.isNull()
+                ? null
+                : value.asText();
     }
 
-    private AccountSession authenticate(String username, char[] password, String encoded, String active) {
+
+    // =========================================================
+    // 7. CREDENTIAL VERIFICATION AND SESSION CREATION
+    // =========================================================
+
+    private AccountSession authenticate(
+            String username,
+            char[] password,
+            String encoded,
+            String active
+    ) {
+
+
+        // -----------------------------------------------------
+        // 7.1. Verify credentials
+        // -----------------------------------------------------
+
         /*
-         * Verify credentials.
-         *
          * Perform PBKDF2 work even when the account does not exist.
          * Legacy plaintext passwords are never accepted.
          */
+
         log.debug(() ->
                 "[AccountManager][login] Starting password verification"
                         + " | algorithm=PBKDF2WithHmacSHA256"
         );
 
-        boolean valid =
-                encoded == null
-                        ? verify(password, dummyHash())
-                        : verify(password, encoded);
+        boolean valid = encoded == null
+                ? verify(password, dummyHash())
+                : verify(password, encoded);
 
-        /*
-         * Handle incorrect credentials or disabled accounts.
-         */
+
+        // -----------------------------------------------------
+        // 7.2. Handle invalid credentials or disabled accounts
+        // -----------------------------------------------------
+
         if (!valid || !"Y".equalsIgnoreCase(active)) {
 
             log.debug(() ->
@@ -235,10 +375,16 @@ public final class AccountManager {
                             + " | reason=CREDENTIALS_OR_ACCOUNT_STATUS_INVALID"
             );
 
+
+            // -------------------------------------------------
+            // 7.2.1. Clean expired login attempt records
+            // -------------------------------------------------
+
             /*
              * Remove expired attempt records when the
              * registry grows beyond its configured threshold.
              */
+
             if (attempts.size() > 5000) {
 
                 log.debug(() ->
@@ -258,10 +404,16 @@ public final class AccountManager {
                 );
             }
 
+
+            // -------------------------------------------------
+            // 7.2.2. Enforce attempt registry capacity
+            // -------------------------------------------------
+
             /*
              * Prevent additional unique usernames from being
              * tracked once the attempt registry is at capacity.
              */
+
             if (attempts.size() >= 5000
                     && !attempts.containsKey(username)) {
 
@@ -275,18 +427,22 @@ public final class AccountManager {
                 );
             }
 
-            /*
-             * Record the failed authentication attempt.
-             */
+
+            // -------------------------------------------------
+            // 7.2.3. Record failed authentication attempt
+            // -------------------------------------------------
+
             attempts.compute(
                     username,
                     (key, old) ->
                             old == null
                                     || Instant.now().isAfter(old.resetAt())
+
                                     ? new Attempts(
                                     1,
                                     Instant.now().plusSeconds(60)
                             )
+
                                     : new Attempts(
                                     old.failures() + 1,
                                     old.resetAt()
@@ -307,11 +463,15 @@ public final class AccountManager {
             );
         }
 
+
+        // -----------------------------------------------------
+        // 7.3. Authentication succeeded
+        // -----------------------------------------------------
+
         /*
-         * Authentication succeeded.
-         *
          * Clear previous failed login attempts.
          */
+
         attempts.remove(username);
 
         log.debug(() ->
@@ -319,9 +479,11 @@ public final class AccountManager {
                         + " | previousAttemptsCleared=true"
         );
 
-        /*
-         * Remove expired sessions before creating a new one.
-         */
+
+        // -----------------------------------------------------
+        // 7.4. Clean expired sessions
+        // -----------------------------------------------------
+
         log.debug(() ->
                 "[AccountManager][login] Cleaning expired sessions"
                         + " | currentSessions=" + sessions.size()
@@ -338,9 +500,11 @@ public final class AccountManager {
                         + " | remainingSessions=" + sessions.size()
         );
 
-        /*
-         * Enforce maximum session capacity.
-         */
+
+        // -----------------------------------------------------
+        // 7.5. Enforce session capacity
+        // -----------------------------------------------------
+
         if (sessions.size() >= 10000) {
 
             log.warn(
@@ -354,11 +518,16 @@ public final class AccountManager {
             );
         }
 
+
+        // -----------------------------------------------------
+        // 7.6. Generate secure session token
+        // -----------------------------------------------------
+
         /*
          * Generate a cryptographically secure session token.
-         *
          * Never log the token or its encoded representation.
          */
+
         log.debug(() ->
                 "[AccountManager][login] Generating secure session token"
                         + " | randomBytes=32"
@@ -368,10 +537,14 @@ public final class AccountManager {
 
         new SecureRandom().nextBytes(random);
 
-        String token =
-                Base64.getUrlEncoder()
-                        .withoutPadding()
-                        .encodeToString(random);
+        String token = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(random);
+
+
+        // -----------------------------------------------------
+        // 7.7. Create account session
+        // -----------------------------------------------------
 
         AccountSession session = new AccountSession(
                 token,
@@ -395,6 +568,11 @@ public final class AccountManager {
         return session;
     }
 
+
+    // =========================================================
+    // 8. SESSION LOOKUP
+    // =========================================================
+
     /**
      * Retrieves a valid, non-expired account session.
      */
@@ -405,10 +583,9 @@ public final class AccountManager {
                         + " | tokenPresent=" + (token != null)
         );
 
-        AccountSession session =
-                token == null
-                        ? null
-                        : sessions.get(token);
+        AccountSession session = token == null
+                ? null
+                : sessions.get(token);
 
         if (session == null) {
 
@@ -420,9 +597,11 @@ public final class AccountManager {
             return Optional.empty();
         }
 
-        /*
-         * Remove expired sessions during lookup.
-         */
+
+        // -----------------------------------------------------
+        // 8.1. Remove expired sessions during lookup
+        // -----------------------------------------------------
+
         if (!Instant.now().isBefore(session.expiresAt())) {
 
             log.debug(() ->
@@ -446,6 +625,11 @@ public final class AccountManager {
 
         return Optional.of(session);
     }
+
+
+    // =========================================================
+    // 9. ACCOUNT LOGOUT
+    // =========================================================
 
     /**
      * Revokes an account session.
@@ -476,6 +660,11 @@ public final class AccountManager {
         }
     }
 
+
+    // =========================================================
+    // 10. USERNAME VALIDATION
+    // =========================================================
+
     /**
      * Validates usernames before database operations.
      */
@@ -495,8 +684,8 @@ public final class AccountManager {
             );
 
             throw new IllegalArgumentException(
-                    "Username must contain 3–30 letters, digits, " +
-                            "dots, underscores or hyphens."
+                    "Username must contain 3–30 letters, digits, "
+                            + "dots, underscores or hyphens."
             );
         }
 
@@ -504,6 +693,11 @@ public final class AccountManager {
                 "[AccountManager][validateUsername] Username validation completed"
         );
     }
+
+
+    // =========================================================
+    // 11. PASSWORD HASH GENERATION
+    // =========================================================
 
     /**
      * Generates a salted PBKDF2 password hash.
@@ -527,7 +721,11 @@ public final class AccountManager {
                         + Base64.getEncoder().encodeToString(salt)
                         + "$"
                         + Base64.getEncoder().encodeToString(
-                        derive(password, salt, ITERATIONS)
+                        derive(
+                                password,
+                                salt,
+                                ITERATIONS
+                        )
                 );
 
         log.debug(() ->
@@ -536,6 +734,11 @@ public final class AccountManager {
 
         return encoded;
     }
+
+
+    // =========================================================
+    // 12. DUMMY PASSWORD HASH
+    // =========================================================
 
     /**
      * Returns the dummy password hash used when an
@@ -547,6 +750,11 @@ public final class AccountManager {
                 + "AAAAAAAAAAAAAAAAAAAAAA==$"
                 + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     }
+
+
+    // =========================================================
+    // 13. PASSWORD HASH VERIFICATION
+    // =========================================================
 
     /**
      * Verifies a password against a stored PBKDF2 hash.
@@ -564,9 +772,11 @@ public final class AccountManager {
 
             String[] parts = encoded.split("\\$");
 
-            /*
-             * Validate the stored hash structure.
-             */
+
+            // -------------------------------------------------
+            // 13.1. Validate hash structure
+            // -------------------------------------------------
+
             if (parts.length != 4
                     || !parts[0].equals("pbkdf2-sha256")) {
 
@@ -579,9 +789,11 @@ public final class AccountManager {
 
             int rounds = Integer.parseInt(parts[1]);
 
-            /*
-             * Reject hashes with unsupported iteration counts.
-             */
+
+            // -------------------------------------------------
+            // 13.2. Validate PBKDF2 iteration count
+            // -------------------------------------------------
+
             if (rounds < ITERATIONS || rounds > 2_000_000) {
 
                 log.warn(
@@ -592,11 +804,14 @@ public final class AccountManager {
                 return false;
             }
 
-            /*
-             * Derive and compare the password hash.
-             */
+
+            // -------------------------------------------------
+            // 13.3. Derive and compare password hashes
+            // -------------------------------------------------
+
             boolean matches = MessageDigest.isEqual(
                     Base64.getDecoder().decode(parts[3]),
+
                     derive(
                             password,
                             Base64.getDecoder().decode(parts[2]),
@@ -620,6 +835,11 @@ public final class AccountManager {
             return false;
         }
     }
+
+
+    // =========================================================
+    // 14. PBKDF2 KEY DERIVATION
+    // =========================================================
 
     /**
      * Derives a 256-bit key using PBKDF2 with HMAC-SHA256.
@@ -645,12 +865,10 @@ public final class AccountManager {
 
         try {
 
-            byte[] derivedKey =
-                    SecretKeyFactory.getInstance(
-                                    "PBKDF2WithHmacSHA256"
-                            )
-                            .generateSecret(spec)
-                            .getEncoded();
+            byte[] derivedKey = SecretKeyFactory
+                    .getInstance("PBKDF2WithHmacSHA256")
+                    .generateSecret(spec)
+                    .getEncoded();
 
             log.debug(() ->
                     "[AccountManager][derive] PBKDF2 key derivation completed"
@@ -658,11 +876,12 @@ public final class AccountManager {
 
             return derivedKey;
 
-        } catch (java.security.GeneralSecurityException exception) {
+        } catch (GeneralSecurityException exception) {
 
             log.error(
                     "[AccountManager][derive] Password key derivation failed"
-                            + " | exception=" + exception.getClass().getSimpleName()
+                            + " | exception="
+                            + exception.getClass().getSimpleName()
             );
 
             throw new IllegalStateException(
