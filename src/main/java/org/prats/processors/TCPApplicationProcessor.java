@@ -38,7 +38,7 @@ public class TCPApplicationProcessor implements TCPProcessor {
             new ConcurrentHashMap<>();
 
     private TCPService tcpService;
-    private org.prats.security.UserAccountService accounts;
+    private boolean guiIngressEnabled;
 
     @Override
     public List<Socket> connectedSockets() {
@@ -50,7 +50,7 @@ public class TCPApplicationProcessor implements TCPProcessor {
 
     }
 
-    public void setUserAccountService(org.prats.security.UserAccountService accounts) { this.accounts = accounts; }
+    public void setGUIIngressEnabled(boolean enabled) { this.guiIngressEnabled = enabled; }
 
     private Message accountCommand(String raw) {
 
@@ -218,11 +218,11 @@ public class TCPApplicationProcessor implements TCPProcessor {
              */
             log.debug(() ->
                     "[TCPApplicationProcessor][processIncoming] Checking for account command"
-                            + " | accountServiceAvailable=" + (accounts != null)
+                            + " | accountServiceAvailable=" + guiIngressEnabled
             );
 
             Message accountRequest =
-                    accounts == null
+                    !guiIngressEnabled
                             ? null
                             : accountCommand(rawMessage);
 
@@ -269,87 +269,17 @@ public class TCPApplicationProcessor implements TCPProcessor {
                             + " | correlationId=" + incomingMessage.getCorrelationId()
             );
 
-            /*
-             * Enforce authentication when the account service
-             * is enabled.
-             *
-             * GUI operations are exempt because they include
-             * account registration and login requests.
-             */
-            if (accounts != null
-                    && incomingMessage.getOperation() != Operation.GUI) {
-
-                log.debug(() ->
-                        "[TCPApplicationProcessor][processIncoming] Validating client authentication"
-                                + " | correlationId=" + incomingMessage.getCorrelationId()
-                                + " | operation=" + incomingMessage.getOperation()
-                );
-
-                boolean authenticated =
-                        accounts.session(
-                                clientConnection.getSessionContext().token()
-                        ).isPresent();
-
-                if (!authenticated) {
-
-                    log.debug(() ->
-                            "[TCPApplicationProcessor][processIncoming] No authenticated session found"
-                                    + " | correlationId=" + incomingMessage.getCorrelationId()
-                    );
-
-                    /*
-                     * Allow unauthenticated clients to execute
-                     * the account management help command.
-                     */
-                    boolean help =
-                            rawMessage.trim()
-                                    .replaceAll("\\s+", " ")
-                                    .equalsIgnoreCase("mng help");
-
-                    if (!help) {
-
-                        log.warn(() ->
-                                "[TCPApplicationProcessor][processIncoming] Incoming request rejected"
-                                        + " | reason=AUTHENTICATION_REQUIRED"
-                                        + " | correlationId=" + incomingMessage.getCorrelationId()
-                                        + " | operation=" + incomingMessage.getOperation()
-                        );
-
-                        tcpService.writeMessage(
-                                "Login required. Use mng register <username> <password> "
-                                        + "or mng login <username> <password>.",
-                                clientConnection
-                        );
-
-                        log.debug(() ->
-                                "[TCPApplicationProcessor][processIncoming] Authentication failure response submitted"
-                                        + " | correlationId=" + incomingMessage.getCorrelationId()
-                        );
-
-                        return;
-                    }
-
-                    log.debug(() ->
-                            "[TCPApplicationProcessor][processIncoming] Unauthenticated help command permitted"
-                                    + " | correlationId=" + incomingMessage.getCorrelationId()
-                    );
-
-                } else {
-
-                    log.debug(() ->
-                            "[TCPApplicationProcessor][processIncoming] Client authentication successful"
-                                    + " | correlationId=" + incomingMessage.getCorrelationId()
-                    );
-                }
-
-            } else {
-
-                log.debug(() ->
-                        "[TCPApplicationProcessor][processIncoming] Authentication validation skipped"
-                                + " | correlationId=" + incomingMessage.getCorrelationId()
-                                + " | accountServiceAvailable=" + (accounts != null)
-                                + " | operation=" + incomingMessage.getOperation()
-                );
+            // The transport supplies session context. GUIHandler requests authorization over MessageService.
+            if (guiIngressEnabled && incomingMessage.getOperation() != Operation.GUI) {
+                Message envelope = messageParser.createEmptyMessage();
+                envelope.setMessageType(MessageType.REQUEST);
+                envelope.setOperation(Operation.GUI);
+                envelope.setCorrelationId(incomingMessage.getCorrelationId());
+                envelope.setPayload(messageParser.convertToJsonNode(Map.of("action", "application")));
+                envelope.setClientSession(clientConnection.getSessionContext());
+                envelope.setApplicationRequest(incomingMessage);
+                dispatchIncoming(envelope, clientConnection);
+                return;
             }
 
             /*
@@ -407,10 +337,21 @@ public class TCPApplicationProcessor implements TCPProcessor {
 
     @Override
     public void onConnectionClosed(ClientConnection connection) {
+        connection.getSessionContext().close();
         if (messageDispatcher instanceof org.prats.services.messageService.MessageService service) service.releaseConnection(connection);
-        if (accounts != null) accounts.logout(connection.getSessionContext().token());
-        connection.getSessionContext().clear();
+        if (guiIngressEnabled) {
+            Message logout = messageParser.createEmptyMessage();
+            logout.setMessageType(MessageType.REQUEST);
+            logout.setOperation(Operation.AUTHENTICATE);
+            logout.setPayload(messageParser.convertToJsonNode(Map.of("action", "disconnect")));
+            logout.setClientSession(connection.getSessionContext());
+            messageDispatcher.dispatchRequest(logout, response -> java.util.concurrent.CompletableFuture.completedFuture(null));
+        } else connection.getSessionContext().clear();
         org.prats.definitions.interfaces.TCPProcessor.super.onConnectionClosed(connection);
+    }
+
+    private void dispatchIncoming(Message request, ClientConnection connection) {
+        messageDispatcher.dispatchRequest(request, new TCPReplyChannel(this, connection));
     }
 
     public CompletionStage<Void> processOutgoing(

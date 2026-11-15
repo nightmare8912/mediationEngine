@@ -16,6 +16,12 @@ public class MessageProcessor {
 
     private CommandForwarder commandForwarder;
     private Forwarder guiForwarder;
+    private Forwarder authenticationForwarder;
+    private Forwarder diagnosticsForwarder;
+
+    public void setAuthenticationForwarder(Forwarder forwarder) { authenticationForwarder = Objects.requireNonNull(forwarder); }
+    public void setDiagnosticsForwarder(Forwarder forwarder) { diagnosticsForwarder = Objects.requireNonNull(forwarder); }
+
 
     public void setGUIForwarder(Forwarder forwarder) { this.guiForwarder = Objects.requireNonNull(forwarder); }
 
@@ -49,6 +55,14 @@ public class MessageProcessor {
     public void process(Message message) {
 
         switch (message.getOperation()) {
+            case AUTHENTICATE -> {
+                if (authenticationForwarder == null) throw new IllegalStateException("Authentication route unavailable");
+                authenticationForwarder.forward(message);
+            }
+            case DIAGNOSTICS, RUN_GC -> {
+                if (diagnosticsForwarder == null) throw new IllegalStateException("Diagnostics route unavailable");
+                diagnosticsForwarder.forward(message);
+            }
             case GUI -> {
                 if (guiForwarder == null) throw new IllegalStateException("GUI requests are supported only by PLATFORM");
                 guiForwarder.forward(message);
@@ -90,6 +104,7 @@ public class MessageProcessor {
                         "[MessageProcessor][process] Command operation forwarded"
                 );
             }
+            default -> throw new IllegalArgumentException("Unsupported operation: " + message.getOperation());
         }
     }
 }

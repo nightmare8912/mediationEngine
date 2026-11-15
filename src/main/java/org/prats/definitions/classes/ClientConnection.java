@@ -17,7 +17,7 @@ public class ClientConnection {
         this.socket = socket;
         this.writer = new BufferedWriter(
                 new OutputStreamWriter(
-                        socket.getOutputStream()
+                        socket.getOutputStream(), java.nio.charset.StandardCharsets.UTF_8
                 )
         );
     }

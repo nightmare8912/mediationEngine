@@ -1,3 +1,4 @@
+
 package org.prats.container.initializers;
 
 import org.prats.database.databaseUtilities.HikariDBConnectionPool.HikariDBConnectionPool;
@@ -7,9 +8,7 @@ import org.prats.definitions.classes.ProcessContext;
 import org.prats.definitions.enums.ContainerType;
 import org.prats.definitions.enums.ProcessType;
 import org.prats.definitions.enums.TCPConnectionMode;
-
 import org.prats.definitions.interfaces.ServiceRegistry;
-
 import org.prats.definitions.records.ConsolidatedECConfig;
 import org.prats.definitions.records.EC;
 import org.prats.definitions.records.TCPPeer;
@@ -20,6 +19,9 @@ import org.prats.forwarders.DatabaseForwarder;
 import org.prats.handlers.DatabaseRequestHandler;
 import org.prats.handlers.ECControlHandler;
 import org.prats.handlers.ExecutionContainerCommandHandler;
+import org.prats.handlers.JVMDiagnosticsHandler;
+
+import org.prats.loggers.EngineLogger;
 
 import org.prats.parsers.CommandParser;
 import org.prats.parsers.MessageParser;
@@ -31,22 +33,28 @@ import org.prats.registries.ContainerServiceRegistry;
 import org.prats.registries.CorrelationRegistry;
 import org.prats.registries.RetryRegistry;
 
+import org.prats.services.containerServices.ExecutionContainerService;
 import org.prats.services.databaseService.DatabaseService;
 import org.prats.services.healthCheckService.HealthService;
 import org.prats.services.messageService.MessageService;
-import org.prats.services.containerServices.ExecutionContainerService;
 import org.prats.services.tcpService.TCPService;
 
-import org.prats.utilities.ContainerRuntime;
 import org.prats.utilities.ApplicationPaths;
+import org.prats.utilities.ContainerRuntime;
+import org.prats.utilities.ECProcessIdentityStore;
 import org.prats.utilities.HealthReportAnalyzer;
-import org.prats.loggers.EngineLogger;
 
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 public class ExecutionContainerInitializer {
 
@@ -66,7 +74,6 @@ public class ExecutionContainerInitializer {
     );
 
     private ExecutionContainerService executionContainerService;
-
     private ServiceRegistry serviceRegistry;
 
     private int tcpPort;
@@ -84,9 +91,9 @@ public class ExecutionContainerInitializer {
     private boolean initializationAttempted;
 
 
-    // ---------------------------------------------------------
-    // ARGUMENT PARSING
-    // ---------------------------------------------------------
+    // =========================================================
+    // 1. ARGUMENT PARSING
+    // =========================================================
 
     private Map<String, String> parseArguments(String[] args) {
 
@@ -138,8 +145,8 @@ public class ExecutionContainerInitializer {
 
                 key = argument.substring(2);
 
-                if (i + 1 >= args.length ||
-                        args[i + 1].startsWith("--")) {
+                if (i + 1 >= args.length
+                        || args[i + 1].startsWith("--")) {
 
                     log.warn(() ->
                             "[ExecutionContainerInitializer][parseArguments] Missing argument value"
@@ -322,9 +329,9 @@ public class ExecutionContainerInitializer {
     }
 
 
-    // ---------------------------------------------------------
-    // INITIALIZATION PARAMETERS
-    // ---------------------------------------------------------
+    // =========================================================
+    // 2. INITIALIZATION PARAMETERS
+    // =========================================================
 
     private void setParametersFromArgs(String[] args) {
 
@@ -335,15 +342,11 @@ public class ExecutionContainerInitializer {
         Map<String, String> parameters = parseArguments(args);
 
         tcpPort = parseInteger(parameters, "tcp-port");
-
         tcpBacklog = parseInteger(parameters, "tcp-backlog");
-
         controlPort = parseInteger(parameters, "control-port");
 
         coreThreads = parseInteger(parameters, "core-threads");
-
         maxThreads = parseInteger(parameters, "max-threads");
-
         idleTimeout = parseInteger(parameters, "idle-timeout");
 
         containerName = required(parameters, "container-name");
@@ -473,7 +476,7 @@ public class ExecutionContainerInitializer {
         if (coreThreads < 0) {
 
             log.warn(() ->
-                    "[ExecutionContainerInitializer][validateParameters] Core thread count cannot be negative"
+                    "[ExecutionContainerInitializer][validateParameters] Core threads cannot be negative"
                             + " | coreThreads=" + coreThreads
             );
 
@@ -536,9 +539,9 @@ public class ExecutionContainerInitializer {
     }
 
 
-    // ---------------------------------------------------------
-    // DATABASE CONFIGURATION RESOLUTION
-    // ---------------------------------------------------------
+    // =========================================================
+    // 3. DATABASE CONFIGURATION RESOLUTION
+    // =========================================================
 
     private String resolveDatabaseConfigPath(EC ec) {
 
@@ -614,8 +617,8 @@ public class ExecutionContainerInitializer {
                         + " | databaseConfigPath=" + resolvedDatabasePath
         );
 
-        if (!Files.isRegularFile(databasePath) ||
-                !Files.isReadable(databasePath)) {
+        if (!Files.isRegularFile(databasePath)
+                || !Files.isReadable(databasePath)) {
 
             log.error(
                     "[ExecutionContainerInitializer][resolveDatabaseConfigPath] Database configuration file does not exist or is not readable"
@@ -639,9 +642,9 @@ public class ExecutionContainerInitializer {
     }
 
 
-    // ---------------------------------------------------------
-    // SERVICE INITIALIZATION
-    // ---------------------------------------------------------
+    // =========================================================
+    // 4. SERVICE REGISTRY AND DEPENDENCY INITIALIZATION
+    // =========================================================
 
     private void initializeServiceRegistryAndDependencies() {
 
@@ -651,12 +654,11 @@ public class ExecutionContainerInitializer {
         );
 
         ProcessType processType = ProcessType.EC;
-
         ContainerType containerType = ContainerType.EC;
 
 
         // -----------------------------------------------------
-        // 1. Parse EC configuration
+        // 4.1. Parse EC configuration
         // -----------------------------------------------------
 
         log.debug(
@@ -664,8 +666,7 @@ public class ExecutionContainerInitializer {
         );
 
         EC ec = Objects.requireNonNull(
-                new ECConfigParser()
-                        .initializeECConfigs(containerConfigPath),
+                new ECConfigParser().initializeECConfigs(containerConfigPath),
                 "EC configuration parser returned null"
         );
 
@@ -685,12 +686,11 @@ public class ExecutionContainerInitializer {
 
         // Database configuration belongs to the EC definition.
         // It is not a mandatory JVM argument.
-
         databaseConfigFile = resolveDatabaseConfigPath(ec);
 
 
         // -----------------------------------------------------
-        // 2. Registries
+        // 4.2. Initialize registries
         // -----------------------------------------------------
 
         log.debug(
@@ -711,7 +711,7 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 3. Parsers
+        // 4.3. Initialize parsers
         // -----------------------------------------------------
 
         log.debug(
@@ -730,7 +730,7 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 4. Response processing
+        // 4.4. Initialize response processing
         // -----------------------------------------------------
 
         log.debug(
@@ -750,7 +750,7 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 5. Command processing
+        // 4.5. Initialize command processing
         // -----------------------------------------------------
 
         log.debug(
@@ -776,7 +776,7 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 6. Optional database infrastructure
+        // 4.6. Initialize optional database infrastructure
         // -----------------------------------------------------
 
         DatabaseService databaseService = null;
@@ -803,14 +803,13 @@ public class ExecutionContainerInitializer {
                             h2DatabaseResourceManager
                     );
 
-            databaseService =
-                    new DatabaseService(
-                            coreThreads,
-                            maxThreads,
-                            idleTimeout,
-                            h2DatabaseResourceManager,
-                            databaseRequestHandler
-                    );
+            databaseService = new DatabaseService(
+                    coreThreads,
+                    maxThreads,
+                    idleTimeout,
+                    h2DatabaseResourceManager,
+                    databaseRequestHandler
+            );
 
             databaseForwarder =
                     new DatabaseForwarder(databaseService);
@@ -828,11 +827,11 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 7. Message processing
+        // 4.7. Initialize message processing
         // -----------------------------------------------------
 
         // databaseForwarder is intentionally null for ECs
-        // that do not have database support configured.
+        // without configured database support.
 
         log.debug(
                 "[ExecutionContainerInitializer] Initializing message processing"
@@ -871,7 +870,7 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 8. Service registry and health monitoring
+        // 4.8. Initialize health monitoring
         // -----------------------------------------------------
 
         log.debug(
@@ -894,7 +893,7 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 9. ExecutionContainerService
+        // 4.9. Initialize ExecutionContainerService
         // -----------------------------------------------------
 
         log.debug(
@@ -931,16 +930,14 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 10. TCP processors
+        // 4.10. Initialize TCP processors
         // -----------------------------------------------------
 
         log.debug(
                 "[ExecutionContainerInitializer] Building configured TCP peer list"
         );
 
-        List<TCPPeer> tcpApplicationPeers =
-                new ArrayList<>();
-
+        List<TCPPeer> tcpApplicationPeers = new ArrayList<>();
 
         for (ConsolidatedECConfig ecConfig : configuredEC) {
 
@@ -968,18 +965,17 @@ public class ExecutionContainerInitializer {
 
         log.debug(() ->
                 "[ExecutionContainerInitializer] TCP control list constructed"
-                        + " | peerCount=" + tcpApplicationPeers.size()
+                        + " | peerCount=" + controlPeers.size()
         );
 
-        TCPControlProcessor TCPControlProcessor =
+        TCPControlProcessor tcpControlProcessor =
                 new TCPControlProcessor(
                         TCPConnectionMode.CLIENT_ONLY,
                         controlPeers,
                         messageParser
                 );
 
-
-        TCPApplicationProcessor TCPApplicationProcessor =
+        TCPApplicationProcessor tcpApplicationProcessor =
                 new TCPApplicationProcessor(
                         tcpApplicationPeers,
                         messageService,
@@ -992,14 +988,14 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 11. Main EC TCP service
+        // 4.11. Initialize main EC TCP service
         // -----------------------------------------------------
 
         log.debug(
                 "[ExecutionContainerInitializer] Initializing main EC TCP service"
         );
 
-        TCPService TCPService =
+        TCPService applicationTcpService =
                 new TCPService(
                         coreThreads,
                         maxThreads,
@@ -1008,7 +1004,7 @@ public class ExecutionContainerInitializer {
                         tcpPort,
                         tcpBacklog,
                         true,
-                        TCPApplicationProcessor
+                        tcpApplicationProcessor
                 );
 
         log.info(() ->
@@ -1018,14 +1014,14 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 12. Control TCP service
+        // 4.12. Initialize control TCP service
         // -----------------------------------------------------
 
         log.debug(
                 "[ExecutionContainerInitializer] Initializing control TCP service"
         );
 
-        TCPService newTCPControlService =
+        TCPService controlTcpService =
                 new TCPService(
                         coreThreads,
                         maxThreads,
@@ -1034,7 +1030,7 @@ public class ExecutionContainerInitializer {
                         controlPort,
                         tcpBacklog,
                         false,
-                        TCPControlProcessor
+                        tcpControlProcessor
                 );
 
         log.info(() ->
@@ -1044,16 +1040,16 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 13. Dependency injection
+        // 4.13. Inject service dependencies
         // -----------------------------------------------------
 
         log.debug(
                 "[ExecutionContainerInitializer] Injecting service dependencies"
         );
 
-        // Database is optional. Only inject it when initialized.
-
+        // Database support is optional.
         if (databaseService != null) {
+
             databaseService.setMessageDispatcher(messageService);
         }
 
@@ -1073,30 +1069,82 @@ public class ExecutionContainerInitializer {
         executionContainerService.setMessageDispatcher(messageService);
 
         executionContainerService.setControlChannelCommunicator(
-                TCPControlProcessor
+                tcpControlProcessor
         );
 
-        ecControlHandler.setControlChannelCommunicator(TCPControlProcessor);
-        org.prats.handlers.JVMDiagnosticsHandler diagnostics = new org.prats.handlers.JVMDiagnosticsHandler(
-                messageParser,
-                () -> serviceRegistry.getAllServices().stream().filter(TCPService.class::isInstance).map(TCPService.class::cast).toList(),
-                () -> healthService.getConsolidatedHealthReport().overallStatus());
-        diagnostics.setRegistryMetrics(() -> Map.of("correlations", correlationRegistry.getSize(),
-                "correlationLimit", correlationRegistry.capacity(), "correlationRejections", correlationRegistry.rejectedCount()));
-        diagnostics.setServiceMetrics(() -> healthService.getConsolidatedHealthReport().services());
+        ecControlHandler.setControlChannelCommunicator(
+                tcpControlProcessor
+        );
+
+
+        // -----------------------------------------------------
+        // 4.14. Initialize JVM diagnostics
+        // -----------------------------------------------------
+
+        log.debug(
+                "[ExecutionContainerInitializer] Initializing JVM diagnostics handler"
+        );
+
+        JVMDiagnosticsHandler diagnostics =
+                new JVMDiagnosticsHandler(
+                        messageParser,
+
+                        () -> serviceRegistry.getAllServices()
+                                .stream()
+                                .filter(TCPService.class::isInstance)
+                                .map(TCPService.class::cast)
+                                .toList(),
+
+                        () -> healthService
+                                .getConsolidatedHealthReport()
+                                .overallStatus()
+                );
+
+        diagnostics.setRegistryMetrics(() ->
+                Map.of(
+                        "correlations",
+                        correlationRegistry.getSize(),
+
+                        "correlationLimit",
+                        correlationRegistry.capacity(),
+
+                        "correlationRejections",
+                        correlationRegistry.rejectedCount()
+                )
+        );
+
+        diagnostics.setServiceMetrics(() ->
+                healthService
+                        .getConsolidatedHealthReport()
+                        .services()
+        );
+
         ecControlHandler.setDiagnostics(diagnostics);
+
+        log.debug(
+                "[ExecutionContainerInitializer] JVM diagnostics handler initialized and injected"
+        );
+
+
+        // -----------------------------------------------------
+        // 4.15. Complete remaining dependency injection
+        // -----------------------------------------------------
 
         healthService.setServiceFailureReporter(
                 executionContainerService
         );
 
-        TCPControlProcessor.setTcpService(newTCPControlService);
+        tcpControlProcessor.setTcpService(
+                controlTcpService
+        );
 
-        TCPControlProcessor.setControlMessageHandler(
+        tcpControlProcessor.setControlMessageHandler(
                 executionContainerService
         );
 
-        TCPApplicationProcessor.setTcpService(TCPService);
+        tcpApplicationProcessor.setTcpService(
+                applicationTcpService
+        );
 
         log.info(
                 "[ExecutionContainerInitializer] All EC service dependencies injected successfully"
@@ -1104,7 +1152,7 @@ public class ExecutionContainerInitializer {
 
 
         // -----------------------------------------------------
-        // 14. Register EC services
+        // 4.16. Register EC services
         // -----------------------------------------------------
 
         log.debug(
@@ -1112,6 +1160,7 @@ public class ExecutionContainerInitializer {
         );
 
         if (databaseService != null) {
+
             serviceRegistry.registerService(databaseService);
         }
 
@@ -1119,12 +1168,12 @@ public class ExecutionContainerInitializer {
 
         serviceRegistry.registerService(
                 "application-tcp",
-                TCPService
+                applicationTcpService
         );
 
         serviceRegistry.registerService(
                 "control-tcp",
-                newTCPControlService
+                controlTcpService
         );
 
         serviceRegistry.registerService(healthService);
@@ -1142,9 +1191,9 @@ public class ExecutionContainerInitializer {
     }
 
 
-    // ---------------------------------------------------------
-    // EC INITIALIZATION
-    // ---------------------------------------------------------
+    // =========================================================
+    // 5. EC INITIALIZATION
+    // =========================================================
 
     private void initializeExecutionContainer(String[] args) {
 
@@ -1188,9 +1237,9 @@ public class ExecutionContainerInitializer {
     }
 
 
-    // ---------------------------------------------------------
-    // EC STARTUP
-    // ---------------------------------------------------------
+    // =========================================================
+    // 6. EC STARTUP
+    // =========================================================
 
     public void startExecutionContainer() {
 
@@ -1218,9 +1267,9 @@ public class ExecutionContainerInitializer {
     }
 
 
-    // ---------------------------------------------------------
-    // JVM ENTRY POINT
-    // ---------------------------------------------------------
+    // =========================================================
+    // 7. JVM ENTRY POINT
+    // =========================================================
 
     public static void main(String[] args) {
 
@@ -1233,19 +1282,55 @@ public class ExecutionContainerInitializer {
 
         try {
 
+            // -------------------------------------------------
+            // 7.1. Construct initializer
+            // -------------------------------------------------
+
             ExecutionContainerInitializer initializer =
                     new ExecutionContainerInitializer();
 
+
+            // -------------------------------------------------
+            // 7.2. Initialize execution container
+            // -------------------------------------------------
+
             initializer.initializeExecutionContainer(args);
+
+
+            // -------------------------------------------------
+            // 7.3. Start execution container
+            // -------------------------------------------------
 
             initializer.startExecutionContainer();
 
-            org.prats.utilities.ECProcessIdentityStore identityStore =
-                    new org.prats.utilities.ECProcessIdentityStore(ApplicationPaths.getHome());
-            identityStore.write(ProcessContext.getProcessName(), ProcessHandle.current());
-            log.info("[ExecutionContainerInitializer][main] EC process identity persisted"
-                    + " | pid=" + ProcessHandle.current().pid()
-                    + " | identityFile=" + identityStore.path(ProcessContext.getProcessName()));
+
+            // -------------------------------------------------
+            // 7.4. Persist EC process identity
+            // -------------------------------------------------
+
+            ECProcessIdentityStore identityStore =
+                    new ECProcessIdentityStore(
+                            ApplicationPaths.getHome()
+                    );
+
+            identityStore.write(
+                    ProcessContext.getProcessName(),
+                    ProcessHandle.current()
+            );
+
+            log.info(() ->
+                    "[ExecutionContainerInitializer][main] EC process identity persisted"
+                            + " | pid=" + ProcessHandle.current().pid()
+                            + " | identityFile="
+                            + identityStore.path(
+                            ProcessContext.getProcessName()
+                    )
+            );
+
+
+            // -------------------------------------------------
+            // 7.5. Startup completed
+            // -------------------------------------------------
 
             log.info(
                     "[ExecutionContainerInitializer][main] Execution container startup sequence completed"

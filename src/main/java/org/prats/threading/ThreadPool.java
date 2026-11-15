@@ -1,5 +1,6 @@
 package org.prats.threading;
 
+import java.util.Map;
 import java.util.concurrent.*;
 
 public class ThreadPool {
@@ -41,7 +42,7 @@ public class ThreadPool {
         return new AdmissionExecutor(delegate, Integer.getInteger("mediation.admission.max-tasks", 1024));
 
     }
-    public static java.util.Map<String, Object> admissionMetrics(ExecutorService executor) {
-        return executor instanceof AdmissionExecutor bounded ? bounded.metrics() : java.util.Map.of();
+    public static Map<String, Object> admissionMetrics(ExecutorService executor) {
+        return executor instanceof AdmissionExecutor bounded ? bounded.metrics() : Map.of();
     }
 }

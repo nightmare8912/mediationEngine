@@ -839,14 +839,19 @@ public class PlatformInitializer {
 
         messageProcessor.setCommandForwarder(commandForwarder);
 
-        org.prats.security.UserAccountService userAccounts =
-                new org.prats.security.UserAccountService(databaseResourceManager);
+        org.prats.security.AccountManager userAccounts =
+                new org.prats.security.AccountManager(messageService, messageParser);
         org.prats.handlers.GUIHandler guiHandler = new org.prats.handlers.GUIHandler(
-                userAccounts, messageParser, commandProcessor,
+                messageService, messageParser,
                 () -> platformDefinition.ecConfigs().stream().map(ConsolidatedECConfig::ecId).toList());
         org.prats.services.guiService.GUIService guiService =
                 new org.prats.services.guiService.GUIService(guiHandler, messageService);
         messageProcessor.setGUIForwarder(new org.prats.forwarders.GUIForwarder(guiService));
+
+        org.prats.services.authenticationService.AuthenticationService authenticationService =
+                new org.prats.services.authenticationService.AuthenticationService(
+                        new org.prats.handlers.AuthenticationHandler(userAccounts, messageParser), messageService);
+        messageProcessor.setAuthenticationForwarder(new org.prats.forwarders.AuthenticationForwarder(authenticationService));
 
         platformService.setCommandHandler(
                 platformCommandHandler
@@ -872,7 +877,7 @@ public class PlatformInitializer {
                         messageService,
                         messageParser
                 );
-        tcpApplicationProcessor.setUserAccountService(userAccounts);
+        tcpApplicationProcessor.setGUIIngressEnabled(true);
 
 
         List<TCPPeer> tcpPeers =
@@ -1011,8 +1016,11 @@ public class PlatformInitializer {
         diagnosticTargets.put(platformDefinition.id(), "PLATFORM");
         platformDefinition.ecConfigs().forEach(ec -> diagnosticTargets.put(ec.ecId(), "EC"));
         platformDefinition.watchdogConfigs().forEach(watchdog -> diagnosticTargets.put(watchdog.id(), "WATCHDOG"));
-        guiHandler.setDiagnostics(new org.prats.handlers.PlatformDiagnostics(platformDefinition.id(), diagnosticTargets,
-                TCPControlProcessor, messageParser, localDiagnostics));
+        org.prats.services.diagnosticsService.DiagnosticsService diagnosticsService =
+                new org.prats.services.diagnosticsService.DiagnosticsService(localDiagnostics, messageService);
+        messageProcessor.setDiagnosticsForwarder(new org.prats.forwarders.DiagnosticsForwarder(platformDefinition.id(),
+                diagnosticTargets.keySet(), diagnosticsService, TCPControlProcessor, messageService, messageParser));
+        guiHandler.setDiagnostics(new org.prats.handlers.PlatformDiagnostics(diagnosticTargets, messageService, messageParser));
 
 
         log.info(() ->
@@ -1029,6 +1037,8 @@ public class PlatformInitializer {
 
         serviceRegistry.registerService(messageService);
         serviceRegistry.registerService(guiService);
+        serviceRegistry.registerService(authenticationService);
+        serviceRegistry.registerService(diagnosticsService);
 
         serviceRegistry.registerService(
                 "application-tcp",

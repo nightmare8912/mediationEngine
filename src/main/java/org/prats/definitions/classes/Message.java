@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.prats.definitions.enums.MessageType;
 import org.prats.definitions.enums.Operation;
 import org.prats.definitions.enums.ProcessType;
+import org.prats.security.ClientSessionContext;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -16,13 +17,29 @@ import java.util.UUID;
 public final class Message {
 
     private boolean responseComplete = true;
+
+    // Local capability: never accepted from JSON or propagated to another JVM.
     @JsonIgnore
-    private org.prats.security.ClientSessionContext clientSession;
+    private boolean accountDatabaseRequest;
 
     @JsonIgnore
-    public org.prats.security.ClientSessionContext getClientSession() { return clientSession; }
+    public boolean isAccountDatabaseRequest() { return accountDatabaseRequest; }
+
     @JsonIgnore
-    public void setClientSession(org.prats.security.ClientSessionContext session) { clientSession = session; }
+    public void setAccountDatabaseRequest(boolean value) { accountDatabaseRequest = value; }
+
+    @JsonIgnore
+    private Message applicationRequest;
+
+    @JsonIgnore
+    public Message getApplicationRequest() { return applicationRequest; }
+
+    @JsonIgnore
+    public void setApplicationRequest(Message value) { applicationRequest = value; }
+
+
+    @JsonIgnore
+    private ClientSessionContext clientSession;
 
     private final UUID messageId;
     private UUID correlationId;
@@ -269,4 +286,10 @@ public final class Message {
     public void setError(Error error) {
         this.error = error;
     }
+
+    @JsonIgnore
+    public ClientSessionContext getClientSession() { return clientSession; }
+
+    @JsonIgnore
+    public void setClientSession(ClientSessionContext session) { clientSession = session; }
 }

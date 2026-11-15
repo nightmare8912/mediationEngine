@@ -41,6 +41,9 @@ public class FutureReplyChannel implements ReplyChannel {
     }
 
     @Override
+    public boolean isClosed() { return future.isDone(); }
+
+    @Override
     public CompletionStage<Void> sendReply(Message response) {
 
         Objects.requireNonNull(response);

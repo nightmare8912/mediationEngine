@@ -17,6 +17,7 @@ public class DatabaseRequestHandler implements RequestHandler {
     private final DatabaseResourceManager database;
     private final MessageSQLParser sqlParser = new MessageSQLParser();
     private final MessageParser parser = new MessageParser(ProcessType.DATABASE);
+    private volatile boolean accountSchemaReady;
     private static final int MAX_ROWS = 1000;
     private static final int MAX_TEXT = 4096;
     private static final int MAX_RESULT_CHARS = 1_000_000;
@@ -85,6 +86,15 @@ public class DatabaseRequestHandler implements RequestHandler {
                 + code + " | correlationId=" + request.getCorrelationId());
         return response(request, Map.of("ok", false, "errorCode", code, "errorDescription", reason, "body", reason));
     }
+    private synchronized void initializeAccountSchema() throws SQLException {
+        if (accountSchemaReady) return;
+        try (Connection connection = database.getDataSource().getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE IF NOT EXISTS users (user_name VARCHAR(30) PRIMARY KEY, password VARCHAR(255) NOT NULL, active VARCHAR(1) NOT NULL)");
+            statement.execute("ALTER TABLE users ALTER COLUMN password VARCHAR(255)");
+        }
+        accountSchemaReady = true;
+    }
+
     @Override public Message handleRequest(Message request) {
         log.debug(() -> "[DatabaseRequestHandler][handleRequest] Executing database operation | operation="
                 + request.getOperation() + " | correlationId=" + request.getCorrelationId());
@@ -92,7 +102,8 @@ public class DatabaseRequestHandler implements RequestHandler {
             if (!Set.of(Operation.FETCH, Operation.SEARCH, Operation.CREATE, Operation.UPDATE, Operation.DELETE).contains(request.getOperation()))
                 return error(request, "UNSUPPORTED_OPERATION", "Unsupported database operation.");
             String entity = request.getPayload() == null ? "" : request.getPayload().path("entity").asText("");
-            if (entity.equalsIgnoreCase("users")) return error(request, "PROTECTED_ENTITY", "Use account commands to manage users.");
+            if (entity.equalsIgnoreCase("users") && !request.isAccountDatabaseRequest()) return error(request, "PROTECTED_ENTITY", "Use account commands to manage users.");
+            if (entity.equalsIgnoreCase("users")) initializeAccountSchema();
             SQLQuery query = sqlParser.createSQLFromMessage(request);
             if (query == null || query.query() == null || query.query().isBlank()) return error(request, "INVALID_REQUEST", "Invalid database request.");
             try (Connection connection = database.getDataSource().getConnection()) {
@@ -105,7 +116,7 @@ public class DatabaseRequestHandler implements RequestHandler {
         catch (SQLException e) {
             log.error("[DatabaseRequestHandler][handleRequest] Database operation failed | sqlState="
                     + e.getSQLState() + " | correlationId=" + request.getCorrelationId());
-            return error(request, "DATABASE_ERROR", "Database operation failed. SQL state: " + e.getSQLState());
+            return error(request, "23505".equals(e.getSQLState()) ? "DUPLICATE_KEY" : "DATABASE_ERROR", "Database operation failed. SQL state: " + e.getSQLState());
         } catch (RuntimeException e) {
             log.error("[DatabaseRequestHandler][handleRequest] Database unavailable | correlationId=" + request.getCorrelationId());
             return error(request, "DATABASE_UNAVAILABLE", "Database service is unavailable.");

@@ -30,18 +30,21 @@ dependencies {
 sourceSets {
     desktop {
         java.srcDir 'src/desktop/java'
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
     }
 }
 
-dependencies {
-    desktopImplementation 'com.fasterxml.jackson.core:jackson-databind:2.19.2'
-}
+configurations.desktopImplementation.extendsFrom(configurations.implementation)
+sourceSets.test.compileClasspath += sourceSets.desktop.output
+sourceSets.test.runtimeClasspath += sourceSets.desktop.output
 
 tasks.register('desktopJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
     archiveBaseName.set('mediation-desktop')
     archiveVersion.set('')
     archiveClassifier.set('')
     from sourceSets.desktop.output
+    from sourceSets.main.output
     configurations = [project.configurations.desktopRuntimeClasspath]
     mergeServiceFiles()
     manifest { attributes 'Main-Class': 'org.prats.desktop.DesktopApplication' }

@@ -63,6 +63,7 @@ public class TCPService implements Service, HealthCheckable {
     private final boolean hasServerSocket;
 
     private final TCPProcessor tcpProcessor;
+    private final int maxFrameChars;
     private final int outboundBudget = Integer.getInteger("mediation.tcp.max-outbound-bytes", 16 * 1024 * 1024);
     private final java.util.concurrent.Semaphore outboundBytes = new java.util.concurrent.Semaphore(outboundBudget);
 
@@ -151,6 +152,15 @@ public class TCPService implements Service, HealthCheckable {
             boolean hasServerSocket,
             TCPProcessor tcpProcessor
     ) {
+        this(coreThreads, maxThreads, idleTimeout, bindHost, tcpPort, tcpBacklog, hasServerSocket,
+                tcpProcessor, Integer.getInteger("mediation.tcp.max-frame-chars", 65536));
+    }
+
+    public TCPService(int coreThreads, int maxThreads, long idleTimeout, String bindHost,
+                      int tcpPort, int tcpBacklog, boolean hasServerSocket, TCPProcessor tcpProcessor,
+                      int maxFrameChars) {
+        if (maxFrameChars < 1) throw new IllegalArgumentException("Frame limit must be positive");
+        this.maxFrameChars = maxFrameChars;
 
         log.debug(() ->
                 "[TCPService][constructor] Initializing TCPService"
@@ -299,7 +309,7 @@ public class TCPService implements Service, HealthCheckable {
     }
 
     private String readBoundedLine(BufferedReader reader) throws IOException {
-        int limit = Integer.getInteger("mediation.tcp.max-frame-chars", 65536);
+        int limit = maxFrameChars;
         StringBuilder line = new StringBuilder();
         int value;
         while ((value = reader.read()) != -1) {
