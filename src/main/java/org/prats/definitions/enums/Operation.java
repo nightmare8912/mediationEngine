@@ -16,6 +16,9 @@ public enum Operation {
 
     HANDSHAKE,
     AUTHENTICATE,
+    LOGIN,
+    LOGOUT,
+    CREATE_USER,
     COMMAND,
     GUI,
     DIAGNOSTICS,

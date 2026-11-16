@@ -1,419 +1,352 @@
 
 package org.prats.managers;
 
-import org.prats.definitions.classes.ClientConnection;
 import org.prats.definitions.enums.Permission;
 import org.prats.definitions.records.Session;
+
 import org.prats.loggers.EngineLogger;
 import org.prats.registries.SessionRegistry;
 
-import java.net.Socket;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * Connection-independent session manager.
+ *
+ * Provides authentication-related session operations
+ * to trusted internal services.
+ *
+ * Responsibilities:
+ *
+ * 1. Register authenticated sessions.
+ * 2. Resolve authoritative sessions by UUID.
+ * 3. Validate existing session credentials.
+ * 4. Refresh time-limited sessions.
+ * 5. Evaluate permissions.
+ * 6. Revoke sessions during logout.
+ * 7. Trigger expired-session cleanup.
+ * 8. Expose session-management metrics.
+ *
+ * SessionRegistry owns session storage.
+ *
+ * No TCP connection is retained by this manager.
+ *
+ * A disconnected client may reconnect and present
+ * the same valid session credential.
+ *
+ * SECURITY:
+ *
+ * Session registration must follow successful
+ * authentication by a trusted handler.
+ *
+ * Authorization must always use permissions retrieved
+ * from the authoritative session registry.
+ */
 public final class InMemorySessionManager {
 
     private static final EngineLogger log =
-            EngineLogger.getLogger(InMemorySessionManager.class);
+            EngineLogger.getLogger(
+                    InMemorySessionManager.class
+            );
 
-    // ---------------------------------------------------------
-    // DEPENDENCIES
-    // ---------------------------------------------------------
+    // =========================================================
+    // 1. DEPENDENCIES
+    // =========================================================
 
+    /**
+     * Authoritative session storage.
+     *
+     * A single instance is shared by authentication
+     * and authorization components.
+     */
     private final SessionRegistry sessionRegistry;
 
-    // ---------------------------------------------------------
-    // CONNECTION-BOUND SESSION REGISTRY
-    // ---------------------------------------------------------
+    // =========================================================
+    // 2. METRICS
+    // =========================================================
 
-    /*
-     * A binding connects an authenticated TCP socket
-     * to the exact session issued for that connection.
-     *
-     * We store the session ID rather than relying on
-     * the user ID alone.
-     *
-     * This prevents a stale socket from revoking
-     * another login belonging to the same user.
+    private final AtomicLong permissionChecks =
+            new AtomicLong();
+
+    private final AtomicLong permissionDenials =
+            new AtomicLong();
+
+    private final AtomicLong logoutRequests =
+            new AtomicLong();
+
+    private final AtomicLong successfulLogouts =
+            new AtomicLong();
+
+    private final AtomicLong cleanupCycles =
+            new AtomicLong();
+
+    // =========================================================
+    // 3. CONSTRUCTORS
+    // =========================================================
+
+    /**
+     * Initializes a session manager with the
+     * default SessionRegistry configuration.
      */
-    private record SessionBinding(
-            String userId,
-            UUID sessionId
-    ) {
-    }
-
-    private final Map<ClientConnection, SessionBinding>
-            connectionSessions = new ConcurrentHashMap<>();
-
-    /*
-     * Only registration, logout and connection cleanup
-     * need to coordinate their multi-step operations.
-     *
-     * High-frequency session validation remains lock-free.
-     *
-     * This monitor belongs to this manager instance.
-     */
-    private final Object lifecycleLock = new Object();
-
-    // ---------------------------------------------------------
-    // CONSTRUCTOR
-    // ---------------------------------------------------------
-
     public InMemorySessionManager() {
 
-        this.sessionRegistry = new SessionRegistry();
+        this(new SessionRegistry());
+    }
+
+    /**
+     * Initializes a session manager with a
+     * supplied shared SessionRegistry.
+     *
+     * Dependency injection allows tests and other
+     * trusted components to use an explicitly
+     * configured registry instance.
+     */
+    public InMemorySessionManager(
+            SessionRegistry sessionRegistry
+    ) {
+
+        this.sessionRegistry = Objects.requireNonNull(
+                sessionRegistry,
+                "SessionRegistry cannot be null"
+        );
 
         log.info(
                 "[InMemorySessionManager][constructor] "
-                        + "In-memory session manager initialized"
+                        + "Connection-independent session manager initialized"
         );
     }
 
-    // ---------------------------------------------------------
-    // REGISTER SESSION
-    // ---------------------------------------------------------
+    /**
+     * Initializes a session manager with a
+     * custom session policy.
+     */
+    public InMemorySessionManager(
+            int maxSessions,
+            long maxLifetimeSeconds,
+            boolean allowNonExpiringSessions
+    ) {
 
-    /*
-     * Creates an authenticated user session and binds
-     * it to the current TCP connection.
+        this(
+                new SessionRegistry(
+                        maxSessions,
+                        maxLifetimeSeconds,
+                        allowNonExpiringSessions
+                )
+        );
+    }
+
+    // =========================================================
+    // 4. REGISTER SESSION
+    // =========================================================
+
+    /**
+     * Creates a session for an authenticated identity.
      *
-     * IMPORTANT:
+     * This operation must only be invoked after
+     * AuthenticationHandler successfully verifies
+     * the credentials or another trusted identity
+     * verification mechanism.
      *
-     * This method must ONLY be called after
-     * AuthenticationService has verified the user's
-     * credentials or another trusted authentication method.
+     * The registry enforces:
      *
-     * Calling this method is a privileged server action.
-     * A username supplied by a remote client is NOT
-     * sufficient evidence to create a session.
+     * - Session capacity.
+     * - One active session per user.
+     * - Expiration policy.
+     * - Defensive permission copying.
      *
-     * One user may have only one active session.
+     * @param userId Authenticated user identifier.
+     * @param permissions Verified server-side permissions.
+     * @param ttlSeconds Requested session TTL.
+     *
+     * @return Newly created session.
      */
     public Session registerSession(
-            ClientConnection connection,
             String userId,
             Set<Permission> permissions,
             long ttlSeconds
     ) {
 
-        Objects.requireNonNull(
-                connection,
-                "Client connection cannot be null"
+        log.debug(() ->
+                "[InMemorySessionManager][registerSession] "
+                        + "Session registration requested"
+                        + " | ttlSeconds=" + ttlSeconds
         );
 
-        // -------------------------------------------------
-        // COORDINATE SESSION REGISTRATION AND BINDING
-        // -------------------------------------------------
-
-        synchronized (lifecycleLock) {
-
-            Socket socket = connection.getSocket();
-
-            if (socket == null ||
-                    !socket.isConnected() ||
-                    socket.isClosed() ||
-                    socket.isInputShutdown() ||
-                    socket.isOutputShutdown()) {
-
-                log.warn(
-                        "[InMemorySessionManager][registerSession] "
-                                + "Session registration rejected: connection unavailable"
+        Session session =
+                sessionRegistry.createSession(
+                        userId,
+                        permissions,
+                        ttlSeconds
                 );
 
-                throw new IllegalStateException(
-                        "Cannot register a session on a closed connection"
-                );
-            }
+        log.info(() ->
+                "[InMemorySessionManager][registerSession] "
+                        + "Authenticated session registered"
+                        + " | userId=" + session.username()
+                        + " | expiresAt=" + session.expiresAt()
+        );
 
-            SessionBinding existingBinding =
-                    connectionSessions.get(connection);
-
-            if (existingBinding != null) {
-
-                /*
-                 * Do not overwrite a valid session
-                 * already bound to this connection.
-                 */
-                if (sessionRegistry.validateSession(
-                        existingBinding.userId(),
-                        existingBinding.sessionId()
-                )) {
-
-                    log.warn(
-                            "[InMemorySessionManager][registerSession] "
-                                    + "Connection already has an authenticated session"
-                    );
-
-                    throw new IllegalStateException(
-                            "Connection already has an active session"
-                    );
-                }
-
-                /*
-                 * If the old session expired, discard
-                 * its stale connection binding.
-                 *
-                 * The same TCP connection may then
-                 * authenticate again.
-                 */
-                connectionSessions.remove(
-                        connection,
-                        existingBinding
-                );
-
-                log.debug(
-                        "[InMemorySessionManager][registerSession] "
-                                + "Stale connection binding removed"
-                );
-            }
-
-            /*
-             * SessionRegistry atomically enforces
-             * the one-active-session-per-user rule.
-             *
-             * A duplicate login throws IllegalStateException.
-             */
-            Session session =
-                    sessionRegistry.createSession(
-                            userId,
-                            permissions,
-                            ttlSeconds
-                    );
-
-            SessionBinding binding =
-                    new SessionBinding(
-                            session.username(),
-                            session.sessionId()
-                    );
-
-            connectionSessions.put(
-                    connection,
-                    binding
-            );
-
-            log.info(() ->
-                    "[InMemorySessionManager][registerSession] "
-                            + "Session registered and bound to TCP connection"
-                            + " | userId=" + session.username()
-                            + " | expiresAt=" + session.expiresAt()
-                            + " | activeSessions="
-                            + sessionRegistry.getSize()
-                            + " | boundConnections="
-                            + connectionSessions.size()
-            );
-
-            return session;
-        }
+        return session;
     }
 
-    // ---------------------------------------------------------
-    // VALIDATE SESSION
-    // ---------------------------------------------------------
+    // =========================================================
+    // 5. RESOLVE SESSION
+    // =========================================================
 
-    /*
-     * Confirms that a Session object refers to a
-     * currently stored and non-expired session.
+    /**
+     * Returns the authoritative session for a UUID.
      *
-     * IMPORTANT:
+     * The result is empty when the session:
      *
-     * This checks session validity only.
+     * - Does not exist.
+     * - Has expired.
+     * - Has been revoked.
      *
-     * It does not verify ownership of a particular
-     * TCP connection.
+     * A session record sent by a client must never
+     * replace the authoritative stored record.
+     */
+    public Optional<Session> getSession(
+            UUID sessionId
+    ) {
+
+        /*
+         * Successful lookups intentionally avoid
+         * per-request DEBUG logging.
+         *
+         * Authorization checks may execute at
+         * high frequency.
+         */
+        return sessionRegistry.getSession(sessionId);
+    }
+
+    // =========================================================
+    // 6. VALIDATE SESSION
+    // =========================================================
+
+    /**
+     * Validates the presented session credential.
      *
-     * For incoming client requests, prefer
-     * validateSessionForConnection().
+     * This operation does not depend on a TCP socket.
+     */
+    public boolean validateSession(
+            UUID sessionId
+    ) {
+
+        return sessionRegistry.validateSession(sessionId);
+    }
+
+    /**
+     * Compatibility validation for a Session record.
+     *
+     * The authoritative stored session is used for
+     * validation.
      */
     public boolean validateSession(
             Session session
     ) {
 
-        if (session == null) {
-
-            log.debug(
-                    "[InMemorySessionManager][validateSession] "
-                            + "Null session rejected"
-            );
-
-            return false;
-        }
-
-        boolean valid =
-                sessionRegistry.validateSession(session);
-
-        log.debug(() ->
-                "[InMemorySessionManager][validateSession] "
-                        + "Session validation completed"
-                        + " | userId=" + session.username()
-                        + " | valid=" + valid
-        );
-
-        return valid;
+        return sessionRegistry.validateSession(session);
     }
 
-    // ---------------------------------------------------------
-    // VALIDATE USER SESSION
-    // ---------------------------------------------------------
+    // =========================================================
+    // 7. USER SESSION EXISTENCE
+    // =========================================================
 
-    /*
-     * Checks whether the specified user currently
-     * has an active, non-expired session.
+    /**
+     * Reports whether a user currently has an
+     * active session.
      *
-     * This is useful for internal session queries.
+     * Intended for internal administrative queries.
      *
-     * It must NOT be used alone to authenticate
-     * an incoming client request, because merely
-     * knowing a username proves nothing.
+     * SECURITY:
+     *
+     * A username is not an authentication credential.
+     * This method must never authorize requests
+     * originating from external clients.
      */
     public boolean validateUserSession(
             String userId
     ) {
 
-        boolean valid =
-                sessionRegistry.getSession(userId).isPresent();
+        return sessionRegistry.hasActiveSessionForUser(
+                userId
+        );
+    }
+
+    // =========================================================
+    // 8. REFRESH SESSION
+    // =========================================================
+
+    /**
+     * Attempts to extend a valid session.
+     *
+     * A refresh cannot:
+     *
+     * - Restore an expired session.
+     * - Restore a revoked session.
+     * - Exceed the absolute session lifetime.
+     *
+     * The session UUID remains unchanged.
+     *
+     * @param sessionId Existing session UUID.
+     * @param ttlSeconds Requested inactivity window.
+     *
+     * @return Refreshed session when valid.
+     */
+    public Optional<Session> refreshSession(
+            UUID sessionId,
+            long ttlSeconds
+    ) {
 
         log.debug(() ->
-                "[InMemorySessionManager][validateUserSession] "
-                        + "User session lookup completed"
-                        + " | userIdPresent="
-                        + (userId != null && !userId.isBlank())
-                        + " | valid=" + valid
+                "[InMemorySessionManager][refreshSession] "
+                        + "Session refresh requested"
+                        + " | ttlSeconds=" + ttlSeconds
         );
 
-        return valid;
-    }
-
-    // ---------------------------------------------------------
-    // VALIDATE CONNECTION-BOUND SESSION
-    // ---------------------------------------------------------
-
-    /*
-     * The request must satisfy all conditions:
-     *
-     * 1. The TCP connection has a session binding.
-     * 2. The supplied session UUID matches that binding.
-     * 3. The authoritative stored session still exists.
-     * 4. The authoritative session has not expired.
-     *
-     * Even if a user knows another user's session ID,
-     * it will not validate against their own connection.
-     */
-    public boolean validateSessionForConnection(
-            ClientConnection connection,
-            UUID sessionId
-    ) {
-
-        return getSessionForConnection(
-                connection,
-                sessionId
-        ).isPresent();
-    }
-
-    // ---------------------------------------------------------
-    // GET AUTHENTICATED SESSION FOR CONNECTION
-    // ---------------------------------------------------------
-
-    /*
-     * Returns the authoritative Session from the
-     * registry, not a potentially forged Session
-     * received from the network.
-     *
-     * Application handlers should use this returned
-     * session when checking permissions.
-     */
-    public Optional<Session> getSessionForConnection(
-            ClientConnection connection,
-            UUID sessionId
-    ) {
-
-        if (connection == null || sessionId == null) {
-
-            log.debug(
-                    "[InMemorySessionManager][getSessionForConnection] "
-                            + "Invalid validation arguments"
-            );
-
-            return Optional.empty();
-        }
-
-        SessionBinding binding =
-                connectionSessions.get(connection);
-
-        if (binding == null) {
-
-            log.debug(
-                    "[InMemorySessionManager][getSessionForConnection] "
-                            + "Connection has no session binding"
-            );
-
-            return Optional.empty();
-        }
-
-        /*
-         * The session provided by the caller must
-         * be the session issued for this very socket.
-         */
-        if (!binding.sessionId().equals(sessionId)) {
-
-            log.warn(
-                    "[InMemorySessionManager][getSessionForConnection] "
-                            + "Session ID does not match connection binding"
-            );
-
-            return Optional.empty();
-        }
-
-        /*
-         * Read the authoritative session, checking
-         * current expiry and the stored UUID.
-         */
-        Optional<Session> stored =
-                sessionRegistry.getSession(
-                        binding.userId()
+        Optional<Session> refreshed =
+                sessionRegistry.refreshSession(
+                        sessionId,
+                        ttlSeconds
                 );
 
-        if (stored.isEmpty()) {
+        if (refreshed.isEmpty()) {
 
             log.debug(
-                    "[InMemorySessionManager][getSessionForConnection] "
-                            + "Bound session is missing or expired"
+                    "[InMemorySessionManager][refreshSession] "
+                            + "Session refresh rejected"
             );
-
-            return Optional.empty();
         }
 
-        Session session = stored.get();
-
-        if (!session.sessionId().equals(binding.sessionId())) {
-
-            log.warn(
-                    "[InMemorySessionManager][getSessionForConnection] "
-                            + "Connection binding refers to a different session"
-            );
-
-            return Optional.empty();
-        }
-
-        return Optional.of(session);
+        return refreshed;
     }
 
-    // ---------------------------------------------------------
-    // PERMISSION CHECK
-    // ---------------------------------------------------------
+    // =========================================================
+    // 9. PERMISSION VALIDATION
+    // =========================================================
 
-    /*
-     * Checks a permission against the authoritative
-     * server-side session.
+    /**
+     * Determines whether a valid session contains
+     * the requested permission.
      *
-     * Never authorize based on a permissions list
-     * received in a client request.
+     * Permissions are retrieved from the authoritative
+     * registry.
+     *
+     * Client-supplied permission lists are ignored.
+     *
+     * @param sessionId Session UUID.
+     * @param permission Required permission.
+     *
+     * @return true when the session is valid
+     *         and the permission is present.
      */
     public boolean hasPermission(
-            ClientConnection connection,
             UUID sessionId,
             Permission permission
     ) {
@@ -423,240 +356,221 @@ public final class InMemorySessionManager {
                 "Permission cannot be null"
         );
 
+        permissionChecks.incrementAndGet();
+
         boolean allowed =
-                getSessionForConnection(
-                        connection,
-                        sessionId
-                )
+                sessionRegistry.getSession(sessionId)
                         .map(session ->
-                                session.permissions().contains(permission)
+                                session.permissions().contains(
+                                        permission
+                                )
                         )
                         .orElse(false);
 
-        log.debug(() ->
-                "[InMemorySessionManager][hasPermission] "
-                        + "Permission evaluated"
-                        + " | permission=" + permission
-                        + " | allowed=" + allowed
-        );
+        if (!allowed) {
+
+            long count =
+                    permissionDenials.incrementAndGet();
+
+            /*
+             * Avoid writing a warning for every rejected
+             * permission check during request bursts.
+             */
+            if (isPowerOfTwo(count)) {
+
+                log.warn(
+                        "[InMemorySessionManager][hasPermission] "
+                                + "Permission check rejected"
+                                + " | requiredPermission="
+                                + permission
+                                + " | totalDenials=" + count
+                );
+            }
+        }
 
         return allowed;
     }
 
-    // ---------------------------------------------------------
-    // REMOVE SESSION ON LOGOUT
-    // ---------------------------------------------------------
+    // =========================================================
+    // 10. LOGOUT
+    // =========================================================
 
-    /*
-     * A user may explicitly log out without closing
-     * their TCP connection.
+    /**
+     * Revokes the session identified by its UUID.
      *
-     * The connection stays open but becomes
-     * unauthenticated until another successful login.
+     * Logout does not require a ClientConnection.
+     *
+     * Once revoked, the UUID is no longer accepted
+     * for new session validations.
+     *
+     * The TCP connection may remain open and perform
+     * another authentication request.
+     *
+     * @param sessionId Session credential to revoke.
+     *
+     * @return true if an existing session was revoked.
      */
     public boolean logout(
-            ClientConnection connection
+            UUID sessionId
     ) {
 
-        if (connection == null) {
-            return false;
-        }
+        logoutRequests.incrementAndGet();
 
-        synchronized (lifecycleLock) {
+        boolean revoked =
+                sessionRegistry.removeSession(sessionId);
 
-            SessionBinding binding =
-                    connectionSessions.remove(connection);
+        if (revoked) {
 
-            if (binding == null) {
+            successfulLogouts.incrementAndGet();
 
-                log.debug(
-                        "[InMemorySessionManager][logout] "
-                                + "No session bound to connection"
-                );
-
-                return false;
-            }
-
-            boolean revoked =
-                    sessionRegistry.removeSession(
-                            binding.userId(),
-                            binding.sessionId()
-                    );
-
-            log.info(() ->
+            log.info(
                     "[InMemorySessionManager][logout] "
-                            + "Connection session invalidated"
-                            + " | userId=" + binding.userId()
-                            + " | revoked=" + revoked
-                            + " | activeSessions="
-                            + sessionRegistry.getSize()
+                            + "Session logout completed successfully"
             );
 
-            return revoked;
-        }
-    }
+        } else {
 
-    // ---------------------------------------------------------
-    // TCP CONNECTION CLOSED
-    // ---------------------------------------------------------
-
-    /*
-     * Called by TCPService or TCPProcessor when a
-     * client connection closes.
-     *
-     * This must run for:
-     *
-     * - Client disconnect
-     * - Read failure
-     * - Write failure
-     * - Forced disconnect
-     * - Service shutdown
-     *
-     * We revoke ONLY the session bound to this
-     * specific connection.
-     *
-     * An older socket cannot accidentally remove
-     * a newer session belonging to the same user.
-     */
-    public void onConnectionClosed(
-            ClientConnection connection
-    ) {
-
-        if (connection == null) {
-            return;
-        }
-
-        log.debug(
-                "[InMemorySessionManager][onConnectionClosed] "
-                        + "TCP connection closure received"
-        );
-
-        synchronized (lifecycleLock) {
-
-            SessionBinding binding =
-                    connectionSessions.remove(connection);
-
-            if (binding == null) {
-
-                log.debug(
-                        "[InMemorySessionManager][onConnectionClosed] "
-                                + "No authenticated session attached to closing connection"
-                );
-
-                return;
-            }
-
-            boolean revoked =
-                    sessionRegistry.removeSession(
-                            binding.userId(),
-                            binding.sessionId()
-                    );
-
-            log.info(() ->
-                    "[InMemorySessionManager][onConnectionClosed] "
-                            + "Connection-bound session cleanup completed"
-                            + " | userId=" + binding.userId()
-                            + " | revoked=" + revoked
-                            + " | remainingSessions="
-                            + sessionRegistry.getSize()
-                            + " | remainingBindings="
-                            + connectionSessions.size()
+            log.debug(
+                    "[InMemorySessionManager][logout] "
+                            + "Logout requested for missing or revoked session"
             );
         }
+
+        return revoked;
     }
 
-    // ---------------------------------------------------------
-    // CLEANUP EXPIRED SESSIONS
-    // ---------------------------------------------------------
+    // =========================================================
+    // 11. CLEANUP EXPIRED SESSIONS
+    // =========================================================
 
-    /*
-     * Invoked periodically by your existing
-     * Platform/EC cleanup scheduler.
+    /**
+     * Removes expired session records.
      *
-     * First remove expired sessions from the registry.
+     * Intended for periodic invocation by an existing
+     * service housekeeping scheduler.
      *
-     * Then remove connection bindings that refer
-     * to sessions which are no longer valid.
+     * No TCP connections are closed.
      *
-     * The TCP sockets are not forcibly closed here.
-     * They may remain connected and authenticate again.
+     * Non-expiring sessions remain until explicitly
+     * revoked.
      */
     public void cleanupExpiredSessions() {
+
+        cleanupCycles.incrementAndGet();
 
         log.debug(() ->
                 "[InMemorySessionManager][cleanupExpiredSessions] "
                         + "Session cleanup started"
-                        + " | activeSessions="
+                        + " | storedSessions="
                         + sessionRegistry.getSize()
-                        + " | boundConnections="
-                        + connectionSessions.size()
         );
 
-        synchronized (lifecycleLock) {
+        int removed =
+                sessionRegistry.removeExpired();
 
-            int expiredSessions =
-                    sessionRegistry.removeExpired();
-
-            int removedBindings = 0;
-
-            for (Map.Entry<ClientConnection, SessionBinding> entry :
-                    connectionSessions.entrySet()) {
-
-                ClientConnection connection = entry.getKey();
-
-                SessionBinding binding = entry.getValue();
-
-                boolean sessionValid =
-                        sessionRegistry.validateSession(
-                                binding.userId(),
-                                binding.sessionId()
-                        );
-
-                if (sessionValid) {
-                    continue;
-                }
-
-                if (connectionSessions.remove(
-                        connection,
-                        binding
-                )) {
-
-                    removedBindings++;
-
-                    log.debug(() ->
-                            "[InMemorySessionManager][cleanupExpiredSessions] "
-                                    + "Stale session binding removed"
-                                    + " | userId=" + binding.userId()
-                    );
-                }
-            }
-
-            final int finalRemovedBindings = removedBindings;
+        if (removed > 0) {
 
             log.info(() ->
                     "[InMemorySessionManager][cleanupExpiredSessions] "
-                            + "Session cleanup completed"
-                            + " | expiredSessions=" + expiredSessions
-                            + " | removedBindings=" + finalRemovedBindings
-                            + " | activeSessions="
+                            + "Expired sessions removed"
+                            + " | removedSessions=" + removed
+                            + " | remainingSessions="
                             + sessionRegistry.getSize()
-                            + " | boundConnections="
-                            + connectionSessions.size()
+            );
+
+        } else {
+
+            log.debug(
+                    "[InMemorySessionManager][cleanupExpiredSessions] "
+                            + "Session cleanup completed without removals"
             );
         }
     }
 
-    // ---------------------------------------------------------
-    // MONITORING
-    // ---------------------------------------------------------
+    // =========================================================
+    // 12. SESSION COUNTS
+    // =========================================================
 
+    /**
+     * Returns the number of currently valid sessions.
+     */
     public int getActiveSessionCount() {
+
+        return Math.toIntExact(
+                sessionRegistry.getActiveSessionCount()
+        );
+    }
+
+    /**
+     * Returns the number of stored session records.
+     *
+     * Expired sessions awaiting cleanup may be included.
+     */
+    public int getStoredSessionCount() {
 
         return sessionRegistry.getSize();
     }
 
-    public int getBoundConnectionCount() {
+    // =========================================================
+    // 13. METRICS
+    // =========================================================
 
-        return connectionSessions.size();
+    /**
+     * Returns an immutable metrics snapshot.
+     *
+     * Combines SessionRegistry metrics with manager
+     * permission, logout and cleanup counters.
+     */
+    public Map<String, Object> metrics() {
+
+        Map<String, Object> metrics =
+                new LinkedHashMap<>(
+                        sessionRegistry.metrics()
+                );
+
+        metrics.put(
+                "permissionChecks",
+                permissionChecks.get()
+        );
+
+        metrics.put(
+                "permissionDenials",
+                permissionDenials.get()
+        );
+
+        metrics.put(
+                "logoutRequests",
+                logoutRequests.get()
+        );
+
+        metrics.put(
+                "successfulLogouts",
+                successfulLogouts.get()
+        );
+
+        metrics.put(
+                "cleanupCycles",
+                cleanupCycles.get()
+        );
+
+        return Map.copyOf(metrics);
+    }
+
+    // =========================================================
+    // 14. INTERNAL UTILITIES
+    // =========================================================
+
+    /**
+     * Returns true when a positive number
+     * is an exact power of two.
+     *
+     * Used for rate-limited warning logs.
+     */
+    private static boolean isPowerOfTwo(
+            long value
+    ) {
+
+        return value > 0
+                && (value & (value - 1)) == 0;
     }
 }

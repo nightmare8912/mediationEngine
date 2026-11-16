@@ -7,75 +7,267 @@ import org.prats.loggers.EngineLogger;
 
 import java.time.DateTimeException;
 import java.time.Instant;
+
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * Thread-safe, connection-independent session registry.
+ *
+ * Responsibilities:
+ *
+ * 1. Create authenticated sessions.
+ * 2. Enforce one active session per user.
+ * 3. Resolve sessions using session UUIDs.
+ * 4. Validate session expiration.
+ * 5. Refresh valid sessions.
+ * 6. Revoke exact sessions.
+ * 7. Remove expired sessions.
+ * 8. Expose registry metrics.
+ *
+ * Sessions are not associated with TCP sockets.
+ *
+ * Closing a TCP connection does not remove a session.
+ * An authenticated client may reconnect and present
+ * the same session credential until expiration or
+ * explicit revocation.
+ *
+ * SECURITY:
+ *
+ * A session UUID acts as a bearer credential.
+ * It must not be logged or accepted as proof of
+ * identity without an authenticated, protected
+ * transport and normal request authorization.
+ *
+ * Session creation is a privileged server-side
+ * operation and must follow successful authentication.
+ */
 public final class SessionRegistry {
 
     private static final EngineLogger log =
             EngineLogger.getLogger(SessionRegistry.class);
 
-    // ---------------------------------------------------------
-    // CONSTANTS
-    // ---------------------------------------------------------
+    // =========================================================
+    // 1. CONFIGURATION
+    // =========================================================
 
-    /*
-     * A TTL of zero represents a session without a
-     * practical time-based expiry.
+    private static final int DEFAULT_MAX_SESSIONS = 30;
+
+    private static final long DEFAULT_MAX_LIFETIME_SECONDS =
+            8L * 60L * 60L;
+
+    /**
+     * Explicit sentinel for sessions with no
+     * time-based expiration.
      *
-     * The session is still explicitly revocable.
+     * Such sessions remain revocable.
+     *
+     * Non-expiring sessions require an explicit
+     * configuration opt-in.
      */
     private static final Instant NEVER_EXPIRES =
             Instant.parse("9999-12-31T23:59:59.999999999Z");
 
-    // ---------------------------------------------------------
-    // SESSION STORAGE
-    // ---------------------------------------------------------
+    private final int maxSessions;
 
-    /*
-     * One active session per normalized user ID.
+    private final long maxLifetimeSeconds;
+
+    private final boolean allowNonExpiringSessions;
+
+    // =========================================================
+    // 2. SESSION STORAGE
+    // =========================================================
+
+    /**
+     * Primary session registry.
+     *
+     * Key:
+     *     Session UUID.
+     *
+     * Value:
+     *     Authoritative Session.
+     *
+     * Successful lookups require only one concurrent
+     * map read, without acquiring the lifecycle lock.
+     */
+    private final Map<UUID, Session> sessionsById =
+            new ConcurrentHashMap<>();
+
+    /**
+     * Secondary index enforcing one active session
+     * per normalized user ID.
      *
      * Example:
      *
-     * ADMIN -> Session
-     * USER1 -> Session
-     * EC01  -> Session
+     * ADMIN -> UUID
+     * USER1 -> UUID
      *
-     * The session UUID is unique to each authentication
-     * lifecycle, even when a user logs in repeatedly.
+     * Every access to this HashMap is protected
+     * by lifecycleLock.
      */
-    private final Map<String, Session> activeSessions =
-            new ConcurrentHashMap<>();
+    private final Map<String, UUID> sessionIdsByUser =
+            new HashMap<>();
 
-    // ---------------------------------------------------------
-    // CREATE SESSION
-    // ---------------------------------------------------------
+    /**
+     * Coordinates changes to both indexes.
+     *
+     * Multi-map modifications must be atomic
+     * relative to other lifecycle operations.
+     *
+     * Ordinary successful session lookups do not
+     * acquire this lock.
+     */
+    private final Object lifecycleLock =
+            new Object();
 
+    // =========================================================
+    // 3. METRICS
+    // =========================================================
+
+    private final AtomicLong createdSessions =
+            new AtomicLong();
+
+    private final AtomicLong refreshedSessions =
+            new AtomicLong();
+
+    private final AtomicLong revokedSessions =
+            new AtomicLong();
+
+    private final AtomicLong expiredSessions =
+            new AtomicLong();
+
+    private final AtomicLong rejectedRegistrations =
+            new AtomicLong();
+
+    private final AtomicLong successfulValidations =
+            new AtomicLong();
+
+    private final AtomicLong failedValidations =
+            new AtomicLong();
+
+    // =========================================================
+    // 4. CONSTRUCTORS
+    // =========================================================
+
+    /**
+     * Creates a registry with default policy.
+     *
+     * Maximum sessions: 30.
+     * Maximum lifetime: 8 hours.
+     * Non-expiring sessions: disabled.
+     */
+    public SessionRegistry() {
+
+        this(
+                DEFAULT_MAX_SESSIONS,
+                DEFAULT_MAX_LIFETIME_SECONDS,
+                false
+        );
+    }
+
+    /**
+     * Creates a registry with an explicit policy.
+     *
+     * @param maxSessions Maximum simultaneously stored sessions.
+     * @param maxLifetimeSeconds Absolute lifetime for timed sessions.
+     * @param allowNonExpiringSessions Whether TTL zero is permitted.
+     */
+    public SessionRegistry(
+            int maxSessions,
+            long maxLifetimeSeconds,
+            boolean allowNonExpiringSessions
+    ) {
+
+        if (maxSessions < 1) {
+
+            throw new IllegalArgumentException(
+                    "Maximum sessions must be positive"
+            );
+        }
+
+        if (maxLifetimeSeconds < 1) {
+
+            throw new IllegalArgumentException(
+                    "Maximum session lifetime must be positive"
+            );
+        }
+
+        this.maxSessions = maxSessions;
+
+        this.maxLifetimeSeconds =
+                maxLifetimeSeconds;
+
+        this.allowNonExpiringSessions =
+                allowNonExpiringSessions;
+
+        log.info(() ->
+                "[SessionRegistry][constructor] "
+                        + "Session registry initialized"
+                        + " | maxSessions=" + maxSessions
+                        + " | maxLifetimeSeconds="
+                        + maxLifetimeSeconds
+                        + " | allowNonExpiringSessions="
+                        + allowNonExpiringSessions
+        );
+    }
+
+    // =========================================================
+    // 5. CREATE SESSION
+    // =========================================================
+
+    /**
+     * Registers a new session after successful
+     * credential or machine-identity authentication.
+     *
+     * Only one active session per user is permitted.
+     *
+     * Expired sessions can be replaced.
+     *
+     * TTL policy:
+     *
+     * ttlSeconds > 0:
+     *     Create a time-limited session.
+     *
+     * ttlSeconds == 0:
+     *     Create a non-expiring session only when
+     *     the registry explicitly permits it.
+     *
+     * ttlSeconds < 0:
+     *     Reject the request.
+     *
+     * A timed session cannot initially exceed
+     * the configured absolute lifetime.
+     *
+     * @return Newly registered authoritative Session.
+     */
     public Session createSession(
             String userId,
             Set<Permission> permissions,
             long ttlSeconds
     ) {
 
-        String normalizedId = requireNormalizedId(userId);
+        // -----------------------------------------------------
+        // VALIDATE INPUT
+        // -----------------------------------------------------
+
+        String normalizedId =
+                requireNormalizedId(userId);
 
         Objects.requireNonNull(
                 permissions,
                 "Session permissions cannot be null"
         );
 
-        if (permissions.stream().anyMatch(Objects::isNull)) {
-
-            log.warn(() ->
-                    "[SessionRegistry][createSession] "
-                            + "Session creation rejected: null permission"
-                            + " | userId=" + normalizedId
-            );
+        if (permissions.contains(null)) {
 
             throw new IllegalArgumentException(
                     "Session permissions cannot contain null"
@@ -84,202 +276,288 @@ public final class SessionRegistry {
 
         if (ttlSeconds < 0) {
 
-            log.warn(() ->
-                    "[SessionRegistry][createSession] "
-                            + "Session creation rejected: negative TTL"
-                            + " | userId=" + normalizedId
-                            + " | ttlSeconds=" + ttlSeconds
-            );
-
             throw new IllegalArgumentException(
                     "Session TTL cannot be negative"
             );
         }
 
-        Instant now = Instant.now();
-        Instant expiresAt;
-
-        try {
-
-            expiresAt = ttlSeconds == 0
-                    ? NEVER_EXPIRES
-                    : now.plusSeconds(ttlSeconds);
-
-        } catch (DateTimeException | ArithmeticException exception) {
-
-            log.error(
-                    "[SessionRegistry][createSession] "
-                            + "Unable to calculate session expiry"
-                            + " | userId=" + normalizedId,
-                    exception
-            );
+        if (ttlSeconds == 0
+                && !allowNonExpiringSessions) {
 
             throw new IllegalArgumentException(
-                    "Session TTL exceeds supported time range",
-                    exception
+                    "Non-expiring sessions are disabled"
             );
         }
 
-        /*
-         * Create a defensive copy of permissions.
-         *
-         * Session must not retain a mutable Set
-         * controlled by the caller.
-         */
         Set<Permission> safePermissions =
                 Set.copyOf(permissions);
 
-        Session newSession = new Session(
-                UUID.randomUUID(),
-                normalizedId,
-                safePermissions,
-                now,
-                expiresAt
-        );
+        // -----------------------------------------------------
+        // COORDINATE REGISTRATION
+        // -----------------------------------------------------
 
-        // -------------------------------------------------
-        // ATOMIC REGISTRATION
-        // -------------------------------------------------
+        synchronized (lifecycleLock) {
 
-        /*
-         * ConcurrentHashMap operations are individually
-         * atomic, but get() followed by put() is not.
-         *
-         * This retry loop guarantees:
-         *
-         * 1. Only one active session per user.
-         * 2. An expired session can be replaced.
-         * 3. Concurrent logins cannot overwrite each other.
-         *
-         * No class-wide synchronized method is needed.
-         */
-        while (true) {
-
-            Session existing =
-                    activeSessions.putIfAbsent(
-                            normalizedId,
-                            newSession
-                    );
-
-            if (existing == null) {
-                break;
-            }
-
-            if (!existing.isExpired()) {
-
-                log.warn(() ->
-                        "[SessionRegistry][createSession] "
-                                + "Active session already exists"
-                                + " | userId=" + normalizedId
-                );
-
-                throw new IllegalStateException(
-                        "User already has an active session"
-                );
-            }
+            Instant now = Instant.now();
 
             /*
-             * Replace only the expired session we observed.
-             *
-             * If another thread changed the entry first,
-             * replace() fails and the loop retries.
+             * Remove expired entries before checking
+             * registration capacity.
              */
-            if (activeSessions.replace(
-                    normalizedId,
-                    existing,
-                    newSession
-            )) {
+            removeExpiredLocked(now);
 
-                log.debug(() ->
-                        "[SessionRegistry][createSession] "
-                                + "Expired session replaced"
-                                + " | userId=" + normalizedId
+            // -------------------------------------------------
+            // ENFORCE ONE SESSION PER USER
+            // -------------------------------------------------
+
+            UUID existingSessionId =
+                    sessionIdsByUser.get(normalizedId);
+
+            if (existingSessionId != null) {
+
+                Session existing =
+                        sessionsById.get(existingSessionId);
+
+                if (existing != null
+                        && !isExpired(existing, now)) {
+
+                    long count =
+                            rejectedRegistrations.incrementAndGet();
+
+                    if (isPowerOfTwo(count)) {
+
+                        log.warn(
+                                "[SessionRegistry][createSession] "
+                                        + "Active session already exists"
+                                        + " | totalRejected="
+                                        + count
+                        );
+                    }
+
+                    throw new IllegalStateException(
+                            "User already has an active session"
+                    );
+                }
+
+                /*
+                 * Defensive removal of an obsolete
+                 * secondary index entry.
+                 */
+                sessionIdsByUser.remove(
+                        normalizedId,
+                        existingSessionId
                 );
-
-                break;
             }
+
+            // -------------------------------------------------
+            // CHECK REGISTRY CAPACITY
+            // -------------------------------------------------
+
+            if (sessionsById.size() >= maxSessions) {
+
+                long count =
+                        rejectedRegistrations.incrementAndGet();
+
+                if (isPowerOfTwo(count)) {
+
+                    log.warn(
+                            "[SessionRegistry][createSession] "
+                                    + "Session registry capacity exhausted"
+                                    + " | maxSessions=" + maxSessions
+                                    + " | rejectedRegistrations="
+                                    + count
+                    );
+                }
+
+                throw new IllegalStateException(
+                        "Maximum active session limit reached"
+                );
+            }
+
+            // -------------------------------------------------
+            // GENERATE EXPIRATION
+            // -------------------------------------------------
+
+            Instant expiresAt;
+
+            if (ttlSeconds == 0) {
+
+                expiresAt = NEVER_EXPIRES;
+
+            } else {
+
+                long effectiveLifetime =
+                        Math.min(
+                                ttlSeconds,
+                                maxLifetimeSeconds
+                        );
+
+                expiresAt = plusSecondsChecked(
+                        now,
+                        effectiveLifetime
+                );
+            }
+
+            // -------------------------------------------------
+            // GENERATE UNIQUE SESSION IDENTIFIER
+            // -------------------------------------------------
+
+            UUID sessionId;
+
+            do {
+
+                sessionId = UUID.randomUUID();
+
+            } while (sessionsById.containsKey(sessionId));
+
+            // -------------------------------------------------
+            // CREATE IMMUTABLE SESSION
+            // -------------------------------------------------
+
+            Session session = new Session(
+                    sessionId,
+                    normalizedId,
+                    safePermissions,
+                    now,
+                    expiresAt
+            );
+
+            // -------------------------------------------------
+            // REGISTER SESSION
+            // -------------------------------------------------
+
+            /*
+             * Publish the secondary mapping first,
+             * then the authoritative session.
+             *
+             * A concurrent reader may observe the
+             * primary session only after its user
+             * index has been populated.
+             */
+            sessionIdsByUser.put(
+                    normalizedId,
+                    sessionId
+            );
+
+            sessionsById.put(
+                    sessionId,
+                    session
+            );
+
+            createdSessions.incrementAndGet();
+
+            log.info(() ->
+                    "[SessionRegistry][createSession] "
+                            + "Session created successfully"
+                            + " | userId=" + normalizedId
+                            + " | permissionCount="
+                            + safePermissions.size()
+                            + " | expiresAt=" + expiresAt
+                            + " | activeSessions="
+                            + sessionsById.size()
+            );
+
+            /*
+             * The UUID is deliberately excluded
+             * from application logs.
+             */
+            return session;
         }
-
-        log.info(() ->
-                "[SessionRegistry][createSession] "
-                        + "Session created successfully"
-                        + " | userId=" + normalizedId
-                        + " | permissionCount=" + safePermissions.size()
-                        + " | createdAt=" + now
-                        + " | expiresAt=" + expiresAt
-                        + " | activeSessions=" + activeSessions.size()
-        );
-
-        return newSession;
     }
 
-    // ---------------------------------------------------------
-    // GET SESSION
-    // ---------------------------------------------------------
+    // =========================================================
+    // 6. RESOLVE SESSION BY UUID
+    // =========================================================
 
-    /*
-     * Retrieve a session only if it exists
-     * and has not expired.
+    /**
+     * Retrieves the authoritative session associated
+     * with a presented session UUID.
      *
-     * Expired entries are removed lazily during lookup,
-     * in addition to periodic cleanup.
+     * A valid session must:
+     *
+     * 1. Exist in the primary registry.
+     * 2. Have an expiration time after the current time.
+     *
+     * A successful lookup does not acquire lifecycleLock.
+     *
+     * IMPORTANT:
+     *
+     * This method verifies current session validity.
+     * It cannot retroactively cancel privileged work
+     * already admitted before a concurrent revocation.
      */
     public Optional<Session> getSession(
-            String userId
+            UUID sessionId
     ) {
 
-        String normalizedId = normalizeId(userId);
+        if (sessionId == null) {
 
-        if (normalizedId == null) {
-
-            log.debug(
-                    "[SessionRegistry][getSession] "
-                            + "Invalid user ID supplied"
-            );
+            recordFailedValidation();
 
             return Optional.empty();
         }
 
         Session session =
-                activeSessions.get(normalizedId);
+                sessionsById.get(sessionId);
 
         if (session == null) {
-            return Optional.empty();
-        }
 
-        if (session.isExpired()) {
-
-            boolean removed =
-                    activeSessions.remove(
-                            normalizedId,
-                            session
-                    );
-
-            if (removed) {
-
-                log.debug(() ->
-                        "[SessionRegistry][getSession] "
-                                + "Expired session removed"
-                                + " | userId=" + normalizedId
-                );
-            }
+            recordFailedValidation();
 
             return Optional.empty();
         }
+
+        Instant now = Instant.now();
+
+        if (isExpired(session, now)) {
+
+            /*
+             * Remove the expired session and its
+             * secondary index using the lifecycle lock.
+             *
+             * Conditional removal prevents a refreshed
+             * version from being removed accidentally.
+             */
+            removeExpiredSession(
+                    sessionId,
+                    session
+            );
+
+            recordFailedValidation();
+
+            return Optional.empty();
+        }
+
+        successfulValidations.incrementAndGet();
 
         return Optional.of(session);
     }
 
-    // ---------------------------------------------------------
-    // VALIDATE SESSION
-    // ---------------------------------------------------------
+    // =========================================================
+    // 7. VALIDATE SESSION
+    // =========================================================
 
-    /*
-     * Validate the presented session against the
-     * authoritative session stored in the registry.
+    /**
+     * Validates a bearer session UUID.
      *
-     * Never trust permissions contained in a Session
-     * object received from a remote client.
+     * The username and permissions are resolved from
+     * the authoritative registry, not from the client.
+     */
+    public boolean validateSession(
+            UUID sessionId
+    ) {
+
+        return getSession(sessionId).isPresent();
+    }
+
+    /**
+     * Compatibility overload for an existing Session.
+     *
+     * Only identity and current registry state
+     * determine validity.
+     *
+     * Permissions supplied in the presented record
+     * are never used for authorization.
      */
     public boolean validateSession(
             Session presentedSession
@@ -289,20 +567,242 @@ public final class SessionRegistry {
             return false;
         }
 
-        return validateSession(
-                presentedSession.username(),
+        return getSession(
                 presentedSession.sessionId()
-        );
+        )
+                .map(stored ->
+                        stored.username().equals(
+                                normalizeId(
+                                        presentedSession.username()
+                                )
+                        )
+                )
+                .orElse(false);
     }
 
-    /*
-     * A valid session must satisfy BOTH:
+    /**
+     * Compatibility overload validating both
+     * the normalized user ID and session UUID.
      *
-     * 1. The user has a non-expired session.
-     * 2. The supplied session UUID matches the stored one.
+     * The UUID remains the authentication credential.
+     * A username alone is never sufficient.
      */
     public boolean validateSession(
             String userId,
+            UUID sessionId
+    ) {
+
+        String normalizedId =
+                normalizeId(userId);
+
+        if (normalizedId == null) {
+            return false;
+        }
+
+        return getSession(sessionId)
+                .map(session ->
+                        session.username().equals(normalizedId)
+                )
+                .orElse(false);
+    }
+
+    // =========================================================
+    // 8. REFRESH SESSION
+    // =========================================================
+
+    /**
+     * Extends a valid, time-limited session.
+     *
+     * Refresh rules:
+     *
+     * 1. The session must exist.
+     * 2. The session must not have expired.
+     * 3. The requested TTL must be positive.
+     * 4. The original session UUID is preserved.
+     * 5. The original creation time is preserved.
+     * 6. Expiration cannot exceed absolute lifetime.
+     *
+     * Refresh is throttled when sufficient session
+     * lifetime remains to avoid unnecessary updates
+     * on every GUI click.
+     *
+     * A non-expiring session is returned unchanged.
+     *
+     * @return Current or refreshed session, if valid.
+     */
+    public Optional<Session> refreshSession(
+            UUID sessionId,
+            long ttlSeconds
+    ) {
+
+        if (sessionId == null) {
+            return Optional.empty();
+        }
+
+        if (ttlSeconds <= 0) {
+
+            throw new IllegalArgumentException(
+                    "Refresh TTL must be positive"
+            );
+        }
+
+        synchronized (lifecycleLock) {
+
+            Session existing =
+                    sessionsById.get(sessionId);
+
+            if (existing == null) {
+                return Optional.empty();
+            }
+
+            Instant now = Instant.now();
+
+            // -------------------------------------------------
+            // REJECT EXPIRED SESSION
+            // -------------------------------------------------
+
+            if (isExpired(existing, now)) {
+
+                removeExpiredLocked(
+                        sessionId,
+                        existing,
+                        now
+                );
+
+                log.debug(
+                        "[SessionRegistry][refreshSession] "
+                                + "Expired session cannot be refreshed"
+                );
+
+                return Optional.empty();
+            }
+
+            // -------------------------------------------------
+            // HANDLE NON-EXPIRING SESSION
+            // -------------------------------------------------
+
+            if (NEVER_EXPIRES.equals(
+                    existing.expiresAt()
+            )) {
+
+                return Optional.of(existing);
+            }
+
+            // -------------------------------------------------
+            // CALCULATE ABSOLUTE EXPIRATION
+            // -------------------------------------------------
+
+            Instant absoluteExpiry =
+                    plusSecondsChecked(
+                            existing.createdAt(),
+                            maxLifetimeSeconds
+                    );
+
+            // -------------------------------------------------
+            // CALCULATE REQUESTED EXPIRATION
+            // -------------------------------------------------
+
+            Instant requestedExpiry =
+                    plusSecondsChecked(
+                            now,
+                            Math.min(
+                                    ttlSeconds,
+                                    maxLifetimeSeconds
+                            )
+                    );
+
+            Instant nextExpiry =
+                    requestedExpiry.isBefore(absoluteExpiry)
+                            ? requestedExpiry
+                            : absoluteExpiry;
+
+            // -------------------------------------------------
+            // PREVENT EXPIRY REDUCTION
+            // -------------------------------------------------
+
+            if (!nextExpiry.isAfter(
+                    existing.expiresAt()
+            )) {
+
+                return Optional.of(existing);
+            }
+
+            // -------------------------------------------------
+            // AVOID REFRESHING ON EVERY REQUEST
+            // -------------------------------------------------
+
+            /*
+             * Refresh only after the remaining time
+             * falls below approximately half of the
+             * requested inactivity window.
+             *
+             * Example:
+             *
+             * TTL = 30 minutes.
+             *
+             * A refresh is skipped while more than
+             * 15 minutes of validity remain.
+             */
+            long remainingSeconds =
+                    existing.expiresAt().getEpochSecond()
+                            - now.getEpochSecond();
+
+            long refreshThresholdSeconds =
+                    Math.max(1, ttlSeconds / 2);
+
+            if (remainingSeconds > refreshThresholdSeconds) {
+
+                return Optional.of(existing);
+            }
+
+            // -------------------------------------------------
+            // REPLACE IMMUTABLE SESSION RECORD
+            // -------------------------------------------------
+
+            Session refreshed = new Session(
+                    existing.sessionId(),
+                    existing.username(),
+                    existing.permissions(),
+                    existing.createdAt(),
+                    nextExpiry
+            );
+
+            /*
+             * The lifecycle lock protects session
+             * mutations against concurrent logout,
+             * cleanup and additional refresh requests.
+             */
+            sessionsById.put(
+                    sessionId,
+                    refreshed
+            );
+
+            refreshedSessions.incrementAndGet();
+
+            log.debug(() ->
+                    "[SessionRegistry][refreshSession] "
+                            + "Session expiration extended"
+                            + " | userId=" + existing.username()
+                            + " | expiresAt=" + nextExpiry
+            );
+
+            return Optional.of(refreshed);
+        }
+    }
+
+    // =========================================================
+    // 9. REVOKE SESSION
+    // =========================================================
+
+    /**
+     * Revokes the exact session identified by UUID.
+     *
+     * The operation does not depend on a TCP connection.
+     *
+     * Logging out invalidates the credential for all
+     * future registry validations.
+     */
+    public boolean removeSession(
             UUID sessionId
     ) {
 
@@ -310,155 +810,397 @@ public final class SessionRegistry {
             return false;
         }
 
-        return getSession(userId)
-                .map(session ->
-                        session.sessionId().equals(sessionId)
-                )
-                .orElse(false);
+        synchronized (lifecycleLock) {
+
+            Session removed =
+                    sessionsById.remove(sessionId);
+
+            if (removed == null) {
+
+                log.debug(
+                        "[SessionRegistry][removeSession] "
+                                + "Session not found"
+                );
+
+                return false;
+            }
+
+            /*
+             * Remove the secondary index only when
+             * it still points to the revoked UUID.
+             */
+            sessionIdsByUser.remove(
+                    removed.username(),
+                    sessionId
+            );
+
+            revokedSessions.incrementAndGet();
+
+            log.info(() ->
+                    "[SessionRegistry][removeSession] "
+                            + "Session revoked successfully"
+                            + " | userId=" + removed.username()
+                            + " | remainingSessions="
+                            + sessionsById.size()
+            );
+
+            return true;
+        }
     }
 
-    // ---------------------------------------------------------
-    // REVOKE EXACT SESSION
-    // ---------------------------------------------------------
-
-    /*
-     * Removes only the session with the expected UUID.
-     *
-     * This is important for connection cleanup:
-     *
-     * An old connection must not accidentally remove
-     * a newer session belonging to the same user.
+    /**
+     * Compatibility overload for revoking a session
+     * only when both username and UUID match.
      */
     public boolean removeSession(
             String userId,
             UUID expectedSessionId
     ) {
 
-        String normalizedId = normalizeId(userId);
+        String normalizedId =
+                normalizeId(userId);
 
-        if (normalizedId == null ||
-                expectedSessionId == null) {
-
-            return false;
-        }
-
-        Session existing =
-                activeSessions.get(normalizedId);
-
-        if (existing == null ||
-                !expectedSessionId.equals(existing.sessionId())) {
-
-            log.debug(() ->
-                    "[SessionRegistry][removeSession] "
-                            + "Session not found or UUID mismatch"
-                            + " | userId=" + normalizedId
-            );
+        if (normalizedId == null
+                || expectedSessionId == null) {
 
             return false;
         }
 
-        /*
-         * Conditional removal protects against a
-         * replacement occurring between get() and remove().
-         */
-        boolean removed =
-                activeSessions.remove(
+        synchronized (lifecycleLock) {
+
+            Session existing =
+                    sessionsById.get(expectedSessionId);
+
+            if (existing == null
+                    || !normalizedId.equals(
+                    existing.username()
+            )) {
+
+                return false;
+            }
+
+            return removeSession(expectedSessionId);
+        }
+    }
+
+    // =========================================================
+    // 10. USER SESSION EXISTENCE
+    // =========================================================
+
+    /**
+     * Reports whether an active session exists
+     * for a normalized user ID.
+     *
+     * This method is intended for administrative
+     * diagnostics and session policy enforcement.
+     *
+     * It must not authenticate an incoming client:
+     * knowing a username is not proof of identity.
+     */
+    public boolean hasActiveSessionForUser(
+            String userId
+    ) {
+
+        String normalizedId =
+                normalizeId(userId);
+
+        if (normalizedId == null) {
+            return false;
+        }
+
+        synchronized (lifecycleLock) {
+
+            UUID sessionId =
+                    sessionIdsByUser.get(normalizedId);
+
+            if (sessionId == null) {
+                return false;
+            }
+
+            Session session =
+                    sessionsById.get(sessionId);
+
+            if (session == null) {
+
+                sessionIdsByUser.remove(
                         normalizedId,
-                        existing
+                        sessionId
                 );
 
-        if (removed) {
+                return false;
+            }
 
-            log.info(() ->
-                    "[SessionRegistry][removeSession] "
-                            + "Session revoked"
-                            + " | userId=" + normalizedId
-                            + " | remainingSessions="
-                            + activeSessions.size()
-            );
+            Instant now = Instant.now();
+
+            if (isExpired(session, now)) {
+
+                removeExpiredLocked(
+                        sessionId,
+                        session,
+                        now
+                );
+
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    // =========================================================
+    // 11. CLEANUP EXPIRED SESSIONS
+    // =========================================================
+
+    /**
+     * Removes expired sessions and their user indexes.
+     *
+     * This method can be called periodically by
+     * AuthenticationService.cleanup().
+     *
+     * Cleanup does not disconnect TCP clients.
+     *
+     * @return Number of expired sessions removed.
+     */
+    public int removeExpired() {
+
+        synchronized (lifecycleLock) {
+
+            int removed =
+                    removeExpiredLocked(Instant.now());
+
+            if (removed > 0) {
+
+                log.info(() ->
+                        "[SessionRegistry][removeExpired] "
+                                + "Expired session cleanup completed"
+                                + " | removed=" + removed
+                                + " | remainingSessions="
+                                + sessionsById.size()
+                );
+
+            } else {
+
+                log.debug(() ->
+                        "[SessionRegistry][removeExpired] "
+                                + "No expired sessions found"
+                                + " | storedSessions="
+                                + sessionsById.size()
+                );
+            }
+
+            return removed;
+        }
+    }
+
+    /**
+     * Removes all expired sessions.
+     *
+     * Caller must hold lifecycleLock.
+     */
+    private int removeExpiredLocked(
+            Instant now
+    ) {
+
+        int removed = 0;
+
+        for (Map.Entry<UUID, Session> entry :
+                sessionsById.entrySet()) {
+
+            if (removeExpiredLocked(
+                    entry.getKey(),
+                    entry.getValue(),
+                    now
+            )) {
+
+                removed++;
+            }
         }
 
         return removed;
     }
 
-    // ---------------------------------------------------------
-    // REMOVE EXPIRED SESSIONS
-    // ---------------------------------------------------------
-
-    /*
-     * Periodic cleanup job.
+    /**
+     * Removes one expired session conditionally.
      *
-     * Iteration over ConcurrentHashMap is weakly
-     * consistent and safe during concurrent updates.
-     *
-     * remove(key, value) prevents a newer session
-     * from being deleted by an old cleanup operation.
+     * Caller must hold lifecycleLock.
      */
-    public int removeExpired() {
+    private boolean removeExpiredLocked(
+            UUID sessionId,
+            Session expectedSession,
+            Instant now
+    ) {
 
-        log.debug(() ->
-                "[SessionRegistry][removeExpired] "
-                        + "Starting expired session cleanup"
-                        + " | activeSessions=" + activeSessions.size()
-        );
-
-        int removedCount = 0;
-
-        for (Map.Entry<String, Session> entry :
-                activeSessions.entrySet()) {
-
-            String userId = entry.getKey();
-            Session session = entry.getValue();
-
-            if (!session.isExpired()) {
-                continue;
-            }
-
-            if (activeSessions.remove(userId, session)) {
-
-                removedCount++;
-
-                log.debug(() ->
-                        "[SessionRegistry][removeExpired] "
-                                + "Expired session removed"
-                                + " | userId=" + userId
-                                + " | expiresAt=" + session.expiresAt()
-                );
-            }
+        if (!isExpired(expectedSession, now)) {
+            return false;
         }
 
-        final int finalRemovedCount = removedCount;
+        if (!sessionsById.remove(
+                sessionId,
+                expectedSession
+        )) {
 
-        log.debug(() ->
-                "[SessionRegistry][removeExpired] "
-                        + "Expired session cleanup completed"
-                        + " | removedSessions=" + finalRemovedCount
-                        + " | remainingSessions="
-                        + activeSessions.size()
+            /*
+             * A refreshed session may have replaced
+             * the previously observed record.
+             */
+            return false;
+        }
+
+        sessionIdsByUser.remove(
+                expectedSession.username(),
+                sessionId
         );
 
-        return removedCount;
+        expiredSessions.incrementAndGet();
+
+        log.debug(() ->
+                "[SessionRegistry][removeExpiredLocked] "
+                        + "Expired session removed"
+                        + " | userId="
+                        + expectedSession.username()
+        );
+
+        return true;
     }
 
-    // ---------------------------------------------------------
-    // REGISTRY SIZE
-    // ---------------------------------------------------------
+    /**
+     * Performs lazy cleanup after an expired
+     * session is encountered during lookup.
+     */
+    private void removeExpiredSession(
+            UUID sessionId,
+            Session expectedSession
+    ) {
 
+        synchronized (lifecycleLock) {
+
+            removeExpiredLocked(
+                    sessionId,
+                    expectedSession,
+                    Instant.now()
+            );
+        }
+    }
+
+    // =========================================================
+    // 12. SESSION COUNT
+    // =========================================================
+
+    /**
+     * Returns the number of stored session records.
+     *
+     * Entries that expired after the last cleanup
+     * may remain until lookup or periodic removal.
+     */
     public int getSize() {
 
-        return activeSessions.size();
+        return sessionsById.size();
     }
 
-    // ---------------------------------------------------------
-    // NORMALIZE USER ID
-    // ---------------------------------------------------------
-
-    /*
-     * Locale.ROOT prevents locale-specific casing
-     * differences, such as Turkish i/I conversion.
+    /**
+     * Counts currently valid, unexpired sessions.
      *
-     * Use the same normalization policy in your
-     * authentication/account service.
+     * This method does not mutate registry state.
+     */
+    public long getActiveSessionCount() {
+
+        Instant now = Instant.now();
+
+        return sessionsById.values()
+                .stream()
+                .filter(session ->
+                        !isExpired(session, now)
+                )
+                .count();
+    }
+
+    // =========================================================
+    // 13. METRICS
+    // =========================================================
+
+    /**
+     * Returns an immutable metrics snapshot.
+     *
+     * Concurrent counters are independently sampled.
+     * The result is not a globally atomic snapshot.
+     */
+    public Map<String, Object> metrics() {
+
+        Map<String, Object> metrics =
+                new LinkedHashMap<>();
+
+        metrics.put("maxSessions", maxSessions);
+
+        metrics.put(
+                "maxLifetimeSeconds",
+                maxLifetimeSeconds
+        );
+
+        metrics.put(
+                "allowNonExpiringSessions",
+                allowNonExpiringSessions
+        );
+
+        metrics.put(
+                "storedSessions",
+                getSize()
+        );
+
+        metrics.put(
+                "activeSessions",
+                getActiveSessionCount()
+        );
+
+        metrics.put(
+                "createdSessions",
+                createdSessions.get()
+        );
+
+        metrics.put(
+                "refreshedSessions",
+                refreshedSessions.get()
+        );
+
+        metrics.put(
+                "revokedSessions",
+                revokedSessions.get()
+        );
+
+        metrics.put(
+                "expiredSessions",
+                expiredSessions.get()
+        );
+
+        metrics.put(
+                "rejectedRegistrations",
+                rejectedRegistrations.get()
+        );
+
+        metrics.put(
+                "successfulValidations",
+                successfulValidations.get()
+        );
+
+        metrics.put(
+                "failedValidations",
+                failedValidations.get()
+        );
+
+        return Map.copyOf(metrics);
+    }
+
+    // =========================================================
+    // 14. INTERNAL VALIDATION UTILITIES
+    // =========================================================
+
+    /**
+     * Normalizes user IDs consistently.
+     *
+     * Locale.ROOT prevents environment-specific
+     * case conversion behavior.
+     *
+     * The account database must apply the same
+     * normalization policy.
      */
     private static String normalizeId(
             String userId
@@ -468,14 +1210,16 @@ public final class SessionRegistry {
             return null;
         }
 
-        return userId.trim().toUpperCase(Locale.ROOT);
+        return userId.trim()
+                .toUpperCase(Locale.ROOT);
     }
 
     private static String requireNormalizedId(
             String userId
     ) {
 
-        String normalizedId = normalizeId(userId);
+        String normalizedId =
+                normalizeId(userId);
 
         if (normalizedId == null) {
 
@@ -485,5 +1229,69 @@ public final class SessionRegistry {
         }
 
         return normalizedId;
+    }
+
+    /**
+     * Determines whether the session has reached
+     * its expiration instant.
+     */
+    private static boolean isExpired(
+            Session session,
+            Instant now
+    ) {
+
+        return !session.expiresAt().isAfter(now);
+    }
+
+    /**
+     * Performs Instant arithmetic with a clear
+     * exception when the configured duration
+     * exceeds the supported date range.
+     */
+    private static Instant plusSecondsChecked(
+            Instant instant,
+            long seconds
+    ) {
+
+        try {
+
+            return instant.plusSeconds(seconds);
+
+        } catch (DateTimeException | ArithmeticException exception) {
+
+            throw new IllegalArgumentException(
+                    "Session duration exceeds supported time range",
+                    exception
+            );
+        }
+    }
+
+    /**
+     * Records invalid session lookups.
+     *
+     * Warnings are emitted at exponentially
+     * increasing intervals to avoid log flooding.
+     */
+    private void recordFailedValidation() {
+
+        long count =
+                failedValidations.incrementAndGet();
+
+        if (isPowerOfTwo(count)) {
+
+            log.warn(
+                    "[SessionRegistry][getSession] "
+                            + "Session validation failed"
+                            + " | totalFailedValidations=" + count
+            );
+        }
+    }
+
+    private static boolean isPowerOfTwo(
+            long value
+    ) {
+
+        return value > 0
+                && (value & (value - 1)) == 0;
     }
 }
