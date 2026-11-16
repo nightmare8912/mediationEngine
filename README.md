@@ -39,7 +39,7 @@ An **Execution Container** here means an application JVM, not a Docker container
 | Desktop GUI | Swing client connecting to PLATFORM's application endpoint | `127.0.0.1:15000`; integration in progress |
 | H2 database | File-backed platform metadata and configured tables | `data/fileprocessor` beneath installation home |
 
-![Default local deployment with separate JVMs and ports](docs/images/04-local-deployment.svg)
+![Default local deployment with separate JVMs and ports](docs/images/04-local-deployment.png)
 
 The control port `15001` in EC and watchdog configurations identifies **PLATFORM's control listener**. It does not mean every JVM binds its own listener on that port.
 
@@ -333,7 +333,7 @@ ECs have application listeners and configured peer connections. Peer application
 
 EC application code does not address WATCHDOG. WATCHDOG's process ownership and an EC's application processing are separate concerns.
 
-![EC lifecycle command and heartbeat paths](docs/images/06-ec-lifecycle.svg)
+![EC lifecycle command and heartbeat paths](docs/images/06-ec-lifecycle.png)
 
 ### Failure boundaries
 
@@ -447,7 +447,7 @@ A future business service should provide lifecycle and health behavior, accept a
 
 ## 10. Message processing in detail
 
-![Concrete request and response pipeline inside a JVM](docs/images/05-message-pipeline.svg)
+![Concrete request and response pipeline inside a JVM](docs/images/05-message-pipeline.png)
 
 ### Normal application request
 
@@ -666,11 +666,13 @@ For a concrete reading path, start with `CommandLineInterface`, `ContainerLaunch
 | [Distributed architecture image](docs/images/01-high-level-architecture.png) | Multi-machine control and peer relationships |
 | [JVM internals image](docs/images/02-execution-container-jvm-internals.png) | Logical execution-container internals |
 | [Core services image](docs/images/03-execution-container-core-services.png) | Service responsibilities and management relationships |
-| [Local deployment image](docs/images/04-local-deployment.svg) | Default JVMs and ports |
-| [Message pipeline image](docs/images/05-message-pipeline.svg) | Concrete request/response class flow |
-| [EC lifecycle image](docs/images/06-ec-lifecycle.svg) | Operator command, WATCHDOG action, and direct EC heartbeat |
+| [Local deployment image](docs/images/04-local-deployment.png) | Default JVMs and ports |
+| [Message pipeline image](docs/images/05-message-pipeline.png) | Concrete request/response class flow |
+| [EC lifecycle image](docs/images/06-ec-lifecycle.png) | Operator command, WATCHDOG action, and direct EC heartbeat |
 | [Platform commands](docs/platform-commands.md) | Management syntax, scope, and heartbeat report semantics |
 | [Message contracts](docs/message-contracts.md) | Payload records and envelope errors |
 | [Desktop and operations](docs/desktop-and-operations.md) | Additional capacity, packaging, and recovery notes |
 
-The original PNGs provide design context; the additional SVGs document the current local runtime and message/control paths. Where companion desktop documentation refers to GUIService, DiagnosticsService, or monitoring screens, treat those as broader design descriptions rather than features confirmed in this checkout.
+The original PNGs provide design context; the additional diagrams document the current local runtime and message/control paths. Where companion desktop documentation refers to GUIService, DiagnosticsService, or monitoring screens, treat those as broader design descriptions rather than features confirmed in this checkout.
+
+Image embeds use repository-relative PNG paths for compatibility with GitHub and Markdown viewers. Editable SVG sources for diagrams 04–06 remain in `docs/images/`. The README and its images must be published together on the branch being viewed.
