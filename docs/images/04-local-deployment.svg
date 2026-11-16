@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="570" viewBox="0 0 1200 570" role="img" aria-labelledby="title desc">
+<title id="title">Local deployment: processes and ports</title><desc id="desc">Default configuration: one machine, separate JVMs, loopback listeners.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#64748b"/></marker></defs>
+<rect width="1200" height="570" rx="18" fill="#f1f5f9"/>
+<text x="40" y="48" font-family="sans-serif" font-size="26" font-weight="700" fill="#0f172a">Local deployment: processes and ports</text>
+<text x="40" y="79" font-family="sans-serif" font-size="16" fill="#475569">Default configuration: one machine, separate JVMs, loopback listeners.</text>
+<path d="M350,170 L440,170" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="403.0" y="160.0" font-family="sans-serif" font-size="14" fill="#334155">launch</text>
+<path d="M850,170 L750,170" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M595,310 L595,225" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="603.0" y="257.5" font-family="sans-serif" font-size="14" fill="#334155">control</text>
+<path d="M440,380 L220,445" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="338.0" y="402.5" font-family="sans-serif" font-size="14" fill="#334155">launch / stop</text>
+<path d="M750,380 L970,445" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="868.0" y="402.5" font-family="sans-serif" font-size="14" fill="#334155">launch / stop</text>
+<path d="M350,495 L850,495" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="608.0" y="485.0" font-family="sans-serif" font-size="14" fill="#334155">direct peer traffic</text>
+<rect x="40" y="120" width="310" height="105" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="58" y="154" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">Installer shell</text>
+<text x="58" y="182" font-family="sans-serif" font-size="15" fill="#334155">mediation-engine.jar</text>
+<text x="58" y="205" font-family="sans-serif" font-size="15" fill="#334155">Launches PLATFORM and WATCHDOG</text>
+<rect x="440" y="120" width="310" height="105" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="458" y="154" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">PLATFORM JVM</text>
+<text x="458" y="182" font-family="sans-serif" font-size="15" fill="#334155">Application: 127.0.0.1:15000</text>
+<text x="458" y="205" font-family="sans-serif" font-size="15" fill="#334155">Control listener: 127.0.0.1:15001</text>
+<rect x="850" y="120" width="310" height="105" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="868" y="154" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">Desktop / nc</text>
+<text x="868" y="182" font-family="sans-serif" font-size="15" fill="#334155">Connect to application port 15000</text>
+<text x="868" y="205" font-family="sans-serif" font-size="15" fill="#334155">Desktop integration is incomplete</text>
+<rect x="440" y="310" width="310" height="100" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="458" y="344" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">WATCHDOG JVM</text>
+<text x="458" y="372" font-family="sans-serif" font-size="15" fill="#334155">wdg01: outbound control connection</text>
+<text x="458" y="395" font-family="sans-serif" font-size="15" fill="#334155">Owns local EC process handles</text>
+<rect x="40" y="445" width="310" height="95" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="58" y="479" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">EC JVM: ec01</text>
+<text x="58" y="507" font-family="sans-serif" font-size="15" fill="#334155">Application listener: 5100</text>
+<text x="58" y="530" font-family="sans-serif" font-size="15" fill="#334155">Outbound PLATFORM control channel</text>
+<rect x="850" y="445" width="310" height="95" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="868" y="479" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">EC JVM: ec02</text>
+<text x="868" y="507" font-family="sans-serif" font-size="15" fill="#334155">Application listener: 10000</text>
+<text x="868" y="530" font-family="sans-serif" font-size="15" fill="#334155">Outbound PLATFORM control channel</text>
+</svg>

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="570" viewBox="0 0 1200 570" role="img" aria-labelledby="title desc">
+<title id="title">EC lifecycle: control plane and process ownership</title><desc id="desc">ECs report directly to PLATFORM; WATCHDOG manages local operating-system processes.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#64748b"/></marker></defs>
+<rect width="1200" height="570" rx="18" fill="#f1f5f9"/>
+<text x="40" y="48" font-family="sans-serif" font-size="26" font-weight="700" fill="#0f172a">EC lifecycle: control plane and process ownership</text>
+<text x="40" y="79" font-family="sans-serif" font-size="16" fill="#475569">ECs report directly to PLATFORM; WATCHDOG manages local operating-system processes.</text>
+<path d="M350,185 L445,185" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M755,185 L850,185" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="810.5" y="175.0" font-family="sans-serif" font-size="14" fill="#334155">control</text>
+<path d="M1000,240 L1000,360" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="1008.0" y="290.0" font-family="sans-serif" font-size="14" fill="#334155">process action</text>
+<path d="M850,420 L755,420" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="810.5" y="410.0" font-family="sans-serif" font-size="14" fill="#334155">heartbeat</text>
+<path d="M595,360 L595,240" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="603.0" y="290.0" font-family="sans-serif" font-size="14" fill="#334155">health report</text>
+<rect x="40" y="130" width="310" height="110" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="58" y="164" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">Operator</text>
+<text x="58" y="192" font-family="sans-serif" font-size="15" fill="#334155">nc → PLATFORM application port</text>
+<text x="58" y="215" font-family="sans-serif" font-size="15" fill="#334155">mng start / stop / restart ec ec01</text>
+<rect x="445" y="130" width="310" height="110" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="463" y="164" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">PLATFORM</text>
+<text x="463" y="192" font-family="sans-serif" font-size="15" fill="#334155">PlatformCommandHandler</text>
+<text x="463" y="215" font-family="sans-serif" font-size="15" fill="#334155">PlatformControlHandler</text>
+<rect x="850" y="130" width="310" height="110" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="868" y="164" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">WATCHDOG</text>
+<text x="868" y="192" font-family="sans-serif" font-size="15" fill="#334155">WatchdogService</text>
+<text x="868" y="215" font-family="sans-serif" font-size="15" fill="#334155">Validates configured EC identity</text>
+<rect x="850" y="360" width="310" height="125" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="868" y="394" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">Local EC JVM</text>
+<text x="868" y="422" font-family="sans-serif" font-size="15" fill="#334155">ContainerLauncher → JVMLauncher</text>
+<text x="868" y="445" font-family="sans-serif" font-size="15" fill="#334155">Independent process and services</text>
+<text x="868" y="468" font-family="sans-serif" font-size="15" fill="#334155">run/&lt;id&gt;.process.properties</text>
+<rect x="445" y="360" width="310" height="125" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="463" y="394" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">PLATFORM health view</text>
+<text x="463" y="422" font-family="sans-serif" font-size="15" fill="#334155">ExternalHealthMonitor</text>
+<text x="463" y="445" font-family="sans-serif" font-size="15" fill="#334155">Latest heartbeat + service health</text>
+<text x="463" y="468" font-family="sans-serif" font-size="15" fill="#334155">Missing / stale ≠ healthy</text>
+</svg>

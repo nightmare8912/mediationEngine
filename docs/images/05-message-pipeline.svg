@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="570" viewBox="0 0 1200 570" role="img" aria-labelledby="title desc">
+<title id="title">Inside a JVM: request and response flow</title><desc id="desc">Concrete class names from this checkout; domain work belongs behind forwarders.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#64748b"/></marker></defs>
+<rect width="1200" height="570" rx="18" fill="#f1f5f9"/>
+<text x="40" y="48" font-family="sans-serif" font-size="26" font-weight="700" fill="#0f172a">Inside a JVM: request and response flow</text>
+<text x="40" y="79" font-family="sans-serif" font-size="16" fill="#475569">Concrete class names from this checkout; domain work belongs behind forwarders.</text>
+<path d="M350,180 L445,180" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M755,180 L850,180" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M1000,235 L1000,350" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M850,410 L755,410" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M445,410 L350,410" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M195,350 L195,235" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="203.0" y="282.5" font-family="sans-serif" font-size="14" fill="#334155">reply</text>
+<path d="M595,235 L595,350" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="603.0" y="282.5" font-family="sans-serif" font-size="14" fill="#334155">correlation context</text>
+<rect x="40" y="130" width="310" height="105" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="58" y="164" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">TCPService</text>
+<text x="58" y="192" font-family="sans-serif" font-size="15" fill="#334155">Socket I/O and line framing</text>
+<text x="58" y="215" font-family="sans-serif" font-size="15" fill="#334155">TCPApplicationProcessor</text>
+<rect x="445" y="130" width="310" height="105" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="463" y="164" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">MessageService</text>
+<text x="463" y="192" font-family="sans-serif" font-size="15" fill="#334155">Dispatches asynchronous work</text>
+<text x="463" y="215" font-family="sans-serif" font-size="15" fill="#334155">RequestProcessor</text>
+<rect x="850" y="130" width="310" height="105" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="868" y="164" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">MessageProcessor</text>
+<text x="868" y="192" font-family="sans-serif" font-size="15" fill="#334155">Routes by Operation</text>
+<text x="868" y="215" font-family="sans-serif" font-size="15" fill="#334155">Command / database forwarders</text>
+<rect x="850" y="350" width="310" height="120" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="868" y="384" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">Service + handler</text>
+<text x="868" y="412" font-family="sans-serif" font-size="15" fill="#334155">Container command handler</text>
+<text x="868" y="435" font-family="sans-serif" font-size="15" fill="#334155">DatabaseService + request handler</text>
+<rect x="445" y="350" width="310" height="120" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="463" y="384" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">ResponseProcessor</text>
+<text x="463" y="412" font-family="sans-serif" font-size="15" fill="#334155">Resolves correlation context</text>
+<text x="463" y="435" font-family="sans-serif" font-size="15" fill="#334155">Completes / retries delivery</text>
+<rect x="40" y="350" width="310" height="120" rx="12" fill="white" stroke="#2563eb" stroke-width="2"/>
+<text x="58" y="384" font-family="sans-serif" font-size="19" font-weight="700" fill="#1e40af">ReplyChannel</text>
+<text x="58" y="412" font-family="sans-serif" font-size="15" fill="#334155">TCPReplyChannel: socket response</text>
+<text x="58" y="435" font-family="sans-serif" font-size="15" fill="#334155">FutureReplyChannel: local future</text>
+</svg>
