@@ -1,501 +1,676 @@
 # Mediation Engine
 
-A distributed, JVM-based mediation platform built around independently executing **Execution Containers (ECs)**, a central **PLATFORM** control plane, and machine-local **WATCHDOG** supervisors.
-
-This README describes the architecture at three levels:
-
-1. The distributed deployment model across machines.
-2. The internal request/response lifecycle inside an Execution Container.
-3. The core services that make up and manage an Execution Container.
-
-> **Architecture note:** This document reflects the architecture and component responsibilities discussed during the design of this project. Where implementation details may still evolve, the description focuses on the intended responsibility and interaction boundary rather than prescribing an unverified implementation detail.
-
----
-
-## Table of contents
-
-- [Architecture at a glance](#architecture-at-a-glance)
-- [1. Distributed deployment architecture](#1-distributed-deployment-architecture)
-- [2. Execution Container: one JVM](#2-execution-container-one-jvm)
-- [3. Request lifecycle inside the Message Service](#3-request-lifecycle-inside-the-message-service)
-- [4. Core Execution Container services](#4-core-execution-container-services)
-  - [Container Service](#container-service)
-  - [Health Service](#health-service)
-  - [Database Service](#database-service)
-  - [Message Service](#message-service)
-  - [Business and domain services](#business-and-domain-services)
-  - [TCP Service](#tcp-service)
-- [5. Registries and shared in-memory infrastructure](#5-registries-and-shared-in-memory-infrastructure)
-- [6. Threading and execution model](#6-threading-and-execution-model)
-- [7. Health reporting and recovery](#7-health-reporting-and-recovery)
-- [8. Architectural boundaries and design principles](#8-architectural-boundaries-and-design-principles)
-- [9. End-to-end request example](#9-end-to-end-request-example)
-- [10. Further architecture diagrams](#10-further-architecture-diagrams)
-
----
-
-## Architecture at a glance
-
-The Mediation Engine separates **platform-level orchestration** from **container-level execution** and **peer-to-peer message processing**.
-
-- **PLATFORM** coordinates the distributed runtime and owns platform-level lifecycle and supervision decisions.
-- Each worker machine runs a **WATCHDOG** and one or more **Execution Containers**.
-- Each **Execution Container (EC)** runs as an independent JVM process.
-- ECs can communicate directly with other ECs, including ECs on other machines.
-- WATCHDOGs communicate with PLATFORM for supervision and lifecycle operations. ECs do not communicate with WATCHDOGs.
-- Inside an EC, the **Container Service** manages the lifecycle and health of the EC's services.
-- The **Message Service** coordinates the request/response pipeline, while dedicated services and handlers execute domain work.
-
-The PLATFORM is a control-plane component. It should not become a proxy or bottleneck for ordinary EC-to-EC workflow traffic.
-
----
-
-## 1. Distributed deployment architecture
-
-![Mediation Engine high-level distributed architecture](docs/images/01-high-level-architecture.png)
-
-### Machines and processes
-
-A representative deployment contains:
-
-| Machine | Components | Responsibility |
-|---|---|---|
-| Platform node | PLATFORM EC | Distributed coordination, lifecycle orchestration, health aggregation and platform-level management |
-| Worker node | One WATCHDOG + multiple EC JVMs | Local process supervision and independent request/workflow execution |
-| Additional worker nodes | One WATCHDOG + multiple EC JVMs | Horizontal execution capacity and peer communication |
-
-The diagram uses three worker machines with four ECs each as an example. The number of machines and ECs per machine is a deployment choice, not a fixed architectural limit.
-
-### Communication relationships
-
-#### EC ↔ EC: peer-to-peer data communication
-
-ECs communicate directly with one another for requests, workflows and other application-level traffic. This communication can cross machine boundaries.
-
-Ordinary workflow traffic should not be routed through PLATFORM. Keeping the data path direct avoids turning PLATFORM into a throughput bottleneck and separates application execution from platform coordination.
-
-#### EC ↔ PLATFORM: platform coordination
-
-ECs communicate with PLATFORM for platform-level concerns such as registration, heartbeats, metadata, health reporting and coordination.
-
-The exact messages and protocol can evolve, but the boundary is important: ECs know about PLATFORM; they do not need to know about WATCHDOG processes.
-
-#### WATCHDOG ↔ PLATFORM: process supervision
-
-Each worker machine has a WATCHDOG responsible for supervising its local EC processes. WATCHDOG communicates with PLATFORM to receive or report lifecycle and supervision information, such as start, stop, restart and process status.
-
-#### EC ↛ WATCHDOG: intentionally absent
-
-An EC does not address, depend on, or communicate with a WATCHDOG. WATCHDOG ownership is a deployment and supervision concern, not part of the EC application data path.
-
----
-
-## 2. Execution Container: one JVM
-
-![Execution Container JVM internals](docs/images/02-execution-container-jvm-internals.png)
-
-An Execution Container is an independent JVM process. It hosts the services, processors, registries, thread pools and runtime infrastructure needed to execute work.
-
-At a high level, an EC contains:
-
-- **TCP Service** — network listener, connection acceptance and socket I/O.
-- **Message Service** — request/response orchestration and dispatch.
-- **Container Service** — lifecycle and service management within the EC.
-- **Health Service** — periodic health checks, health evaluation and reporting.
-- **Database Service** — managed database connectivity and pooled access.
-- **Business/domain services** — application-specific work performed by service handlers.
-- **Shared in-memory infrastructure** — correlation, retry and heartbeat registries, configuration and metrics.
-- **Scheduler and runtime utilities** — periodic cleanup, TTL expiry, health cycles and other scheduled work.
-
-The JVM is the process boundary for an EC. A failure severe enough to terminate that JVM affects all services hosted inside that EC, which is why service health, process supervision and platform-level recovery are separate but cooperating responsibilities.
-
----
-
-## 3. Request lifecycle inside the Message Service
-
-The following describes the intended request path for a request arriving over TCP. The same Message Service architecture can support other reply channels, so TCP is only one possible ingress and egress mechanism.
-
-### Request path
-
-1. **Client sends a message.** A client, peer EC or external system sends a request over a supported transport, such as TCP.
-2. **TCP Service accepts and reads.** The TCP listener accepts the connection. The TCP application process handles connection I/O, reads the incoming data and hands the message into the application pipeline.
-3. **Message Dispatcher receives the message.** The dispatcher (the orchestration entry point of the Message Service) hands the incoming message to the Input Processor.
-4. **Input Processor decodes and classifies.** It attempts to decode, validate and classify the incoming message into the engine's internal representation.
-5. **Command Processor handles command fallback.** If the Input Processor cannot decode the input as a normal request, it gives the input to the Command Processor to check whether it is a recognized platform or operational command.
-6. **Command result returns to the input path.** If recognized, the command is converted into a representation the Input Processor understands and is routed back through that path. If it is not recognized, the engine generates an `Unknown Command` response.
-7. **Request Processor establishes request context.** For a valid request, the Request Processor creates or records the correlation context, including the reply channel needed to return the response.
-8. **Forwarders route the request.** Dedicated forwarders select the appropriate target service and deliver the request to it.
-9. **Service executes the work.** The target service accepts the work on its execution mechanism, invokes the appropriate handler and produces a result or response.
-10. **Response Processor resolves the reply destination.** The Response Processor uses the correlation information to find the original reply channel and prepares the outgoing response.
-11. **Reply Channel delivers the response.** The response is sent through the recorded channel, such as the original TCP connection, an EC-to-EC channel, a PLATFORM channel or another supported reply mechanism.
-
-### Why the correlation registry matters
-
-The service that produces a response does not need to know how the original request arrived. It produces a response for the Message Service's response path. The Response Processor resolves the original request context and its `ReplyChannel`, then dispatches the response through that abstraction.
-
-This decouples business processing from transport-specific response delivery.
-
-### Unknown command path
-
-If neither the Input Processor nor the Command Processor can interpret the incoming input, the engine returns an `Unknown Command` response through the appropriate reply path. The request should not proceed into normal business-service forwarding.
-
----
-
-## 4. Core Execution Container services
-
-![Execution Container core services architecture](docs/images/03-execution-container-core-services.png)
-
-The EC's services have distinct responsibilities. The **Container Service** is the in-process manager of these services; it is not a replacement for PLATFORM or WATCHDOG.
-
-### Container Service
-
-The Container Service is the service manager inside an EC. It owns the lifecycle and coordination of the EC's registered services.
-
-Its responsibilities include:
-
-- Initializing and starting the services that belong to the EC.
-- Maintaining the service registry and service lifecycle state.
-- Coordinating service shutdown and restart operations.
-- Collecting health status and relevant service metrics.
-- Aggregating service-level health into an EC-level health view.
-- Applying local recovery policy where a service can be recovered independently.
-- Reporting EC health and relevant diagnostic information to PLATFORM.
-- Handling platform lifecycle commands that are directed to the EC.
-
-The Container Service is the internal management point for EC services. It should not become a general-purpose message broker for application traffic.
-
-#### Service health versus EC health
-
-A single service can be unhealthy while the JVM remains operational. The Container Service can evaluate whether the affected service can be restarted locally or whether the overall EC is unhealthy and requires platform-level intervention.
-
-If the EC itself is unhealthy or cannot recover safely, the Container Service reports that condition to PLATFORM. PLATFORM can then coordinate process-level recovery through the relevant WATCHDOG.
-
-### Health Service
-
-The Health Service monitors the health of the EC and its registered services.
-
-Typical responsibilities include:
-
-- Running periodic health-check cycles.
-- Checking whether registered services are responsive and operational.
-- Collecting service health information and relevant metrics.
-- Checking dependencies where supported, such as database connectivity.
-- Maintaining health status and diagnostic details.
-- Reporting health information to the Container Service.
-- Detecting unhealthy conditions and raising them for evaluation.
-
-The Health Service observes and reports. It should not independently own the entire service lifecycle or make platform-level process-restart decisions. The Container Service coordinates local service management, and PLATFORM coordinates distributed process supervision.
-
-### Database Service
-
-The Database Service provides controlled access to the configured database.
-
-Typical responsibilities include:
-
-- Creating and managing the configured data source.
-- Providing pooled connections through HikariCP.
-- Exposing a consistent database-access facility to services that need persistence.
-- Performing database connectivity and health checks.
-- Managing initialization and schema-related setup where that responsibility is configured.
-- Exposing relevant pool and connection health metrics.
-- Handling data-access lifecycle during EC startup and shutdown.
-
-Other services should use the Database Service's managed data-access facilities rather than each creating an unrelated connection pool. This centralizes connection configuration, resource ownership and database health visibility.
-
-The EC may use an embedded database for local runtime metadata during development or deployment, while application/business persistence can use an external database such as PostgreSQL or Oracle, depending on configuration.
-
-### Message Service
-
-The Message Service is the EC's request/response orchestration layer.
-
-Its responsibilities include:
-
-- Receiving messages handed off by ingress components.
-- Dispatching messages through the input-processing pipeline.
-- Decoding, validating and classifying incoming messages.
-- Routing operational commands through the command-processing path.
-- Creating request correlation context.
-- Recording the reply channel associated with each request.
-- Forwarding valid requests to the appropriate service.
-- Processing service responses and resolving their original request context.
-- Delivering responses through the correct reply channel.
-- Coordinating retry and pending-delivery behavior where applicable.
-
-The Message Service owns message-flow orchestration, not the business logic of every service. It should route work to the appropriate service rather than embedding domain-specific behavior into the dispatcher.
-
-### Business and domain services
-
-Business/domain services implement the actual application work. Examples include mediation, file processing, workflow execution or other domain-specific capabilities.
-
-A typical service:
-
-1. Receives a request routed by its forwarder.
-2. Accepts the work using its own execution mechanism or thread pool.
-3. Invokes the appropriate handler.
-4. Performs the requested business operation.
-5. Produces a response or result.
-6. Hands the response back to the Message Service's response path.
-
-Services should own their domain logic and execution concerns. They should not need to know the transport details of the original request.
-
-### TCP Service
-
-The TCP Service is a transport adapter. It accepts network connections, performs socket I/O and hands incoming messages to the Message Service.
-
-Typical responsibilities include:
-
-- Binding and listening on the configured TCP port.
-- Accepting client connections.
-- Managing connection-level read/write operations.
-- Framing incoming messages according to the configured protocol.
-- Handing complete messages to the Message Service.
-- Providing a TCP-backed `ReplyChannel` for responses.
-- Tracking connection lifecycle and relevant transport metrics.
-
-The TCP Service should not implement business routing or domain processing. Its responsibility ends at transport ingress/egress and the handoff to the message pipeline.
-
----
-
-## 5. Registries and shared in-memory infrastructure
-
-The EC uses in-memory registries to coordinate asynchronous request/response work and runtime state.
-
-### Correlation Registry
-
-The Correlation Registry associates an in-flight request with the information needed to complete it.
-
-A typical entry may contain:
-
-- Request or correlation identifier.
-- Original `ReplyChannel`.
-- Request context or metadata needed for response handling.
-- Creation time and expiry/TTL information.
-
-When a response arrives, the Response Processor looks up the correlation entry, retrieves the reply channel and delivers the response. Entries must be removed after completion or expiry so abandoned requests do not accumulate indefinitely.
-
-### Retry Registry
-
-The Retry Registry tracks deliveries or requests that may be retried.
-
-A typical pending-delivery entry may contain:
-
-- Delivery or correlation identifier.
-- Pending response/delivery state.
-- Retry count and next-attempt information.
-- Expiry/TTL information.
-
-Retry policy should be bounded and explicit. Expired or completed entries must be cleaned up, and retry behavior should avoid creating unbounded work during downstream failures.
-
-### Heartbeat Registry
-
-The Heartbeat Registry maintains recent heartbeat information for containers or peers.
-
-It can support:
-
-- Last-seen timestamps.
-- Heartbeat history.
-- TTL-based expiry.
-- Peer/container liveness evaluation.
-- Health diagnostics and reporting.
-
-Heartbeat information is an observation of liveness, not proof that every application operation is healthy. It should be interpreted alongside service-level health checks and other signals.
-
-### Metrics and configuration
-
-Runtime metrics and configuration are shared infrastructure concerns. Metrics can expose service health, request counts, failures, queue activity, thread-pool behavior and JVM characteristics. Configuration supplies the runtime settings used to initialize services and their dependencies.
-
----
-
-## 6. Threading and execution model
-
-The EC is one JVM process, but its services can use separate execution resources so that network I/O, dispatch, scheduled maintenance and business work do not all compete in one execution path.
-
-A typical logical breakdown is:
-
-| Execution resource | Responsibility |
-|---|---|
-| TCP acceptor | Accepts new socket connections |
-| TCP I/O workers | Reads from and writes to client sockets |
-| Message/dispatcher workers | Dispatches and processes incoming messages |
-| Service workers | Executes service handlers and business logic |
-| Scheduler threads | Runs periodic health checks, TTL cleanup and retry-related tasks |
-| JVM runtime threads | Garbage collection, JIT compilation and other JVM-managed work |
-
-The exact thread pools and sizing are configuration and implementation decisions. The important design goal is isolation of responsibilities, bounded resource usage and predictable overload behavior.
-
-### Backpressure and failure handling
-
-A long-running EC must handle load beyond its instantaneous processing capacity. Queues, executors and connection limits should be bounded or governed by explicit admission policies. Rejected work should be handled deliberately—for example, with a controlled error response, retry policy or connection-level failure—rather than allowing resource exhaustion to cascade through the JVM.
-
-Virtual threads can be useful for suitable blocking workloads, but they do not remove the need to bound external resources such as database connections, sockets, memory, downstream capacity and queued work.
-
----
-
-## 7. Health reporting and recovery
-
-Health management is layered:
-
-1. **Health Service observes.** It runs checks and gathers service-level health and metrics.
-2. **Container Service evaluates.** It aggregates the service results and determines whether local recovery is appropriate.
-3. **Container Service reports.** It sends the EC's health state and diagnostics to PLATFORM.
-4. **PLATFORM coordinates.** If the EC is unhealthy or cannot recover locally, PLATFORM coordinates the process-level action.
-5. **WATCHDOG supervises the process.** The machine-local WATCHDOG performs the relevant process lifecycle operation under PLATFORM's supervision model.
-
-This separates three different concerns:
-
-- Detecting that something is wrong.
-- Deciding what recovery action is appropriate.
-- Executing process-level lifecycle operations.
-
-A service restart inside a healthy JVM is different from restarting the entire EC process. The latter affects every service hosted by that JVM and should be coordinated as a process lifecycle operation.
-
-### Example health report
-
-The following is illustrative only; actual field names and payload formats are defined by the implementation:
-
-```json
-{
-  "ecId": "EC-2",
-  "status": "HEALTHY",
-  "services": {
-    "health": "UP",
-    "database": "UP",
-    "message": "UP"
-  },
-  "metrics": {
-    "activeThreads": 128,
-    "heapUsedMb": 258
-  },
-  "timestamp": "2026-11-13T12:30:00Z"
-}
+Mediation Engine is a Java 25 runtime built around a **PLATFORM** control plane, machine-local **WATCHDOG** supervisors, and independent **Execution Container (EC)** JVMs. It separates process supervision, service lifecycle management, TCP transport, asynchronous message routing, health reporting, and database access.
+
+This guide covers building and installing the runtime, launching services, connecting the desktop client, managing ECs, and understanding the code internally. Commands and defaults refer to the configuration committed in this repository.
+
+> **Implementation status:** The platform/EC/watchdog runtime and management command paths are implemented. The Swing desktop contains connection and login code, but GUI integration is in progress: `GUIForwarder.forward()` is empty, and the platform initializer does not wire the authentication or diagnostics forwarders. A successful TCP connection does not imply a working login or dashboard. Some companion documents describe a broader target architecture; the implementation notes below identify the current boundaries.
+
+## Contents
+
+- [1. Runtime overview](#1-runtime-overview)
+- [2. Prerequisites and build](#2-prerequisites-and-build)
+- [3. Install from source](#3-install-from-source)
+- [4. Launch and verify the services](#4-launch-and-verify-the-services)
+- [5. Desktop GUI and its PLATFORM connection](#5-desktop-gui-and-its-platform-connection)
+- [6. Configuration guide](#6-configuration-guide)
+- [7. Overall distributed architecture](#7-overall-distributed-architecture)
+- [8. Internal JVM architecture](#8-internal-jvm-architecture)
+- [9. Services and their responsibilities](#9-services-and-their-responsibilities)
+- [10. Message processing in detail](#10-message-processing-in-detail)
+- [11. Registries, threading, and capacity](#11-registries-threading-and-capacity)
+- [12. Health, recovery, and process identity](#12-health-recovery-and-process-identity)
+- [13. Operations and upgrades](#13-operations-and-upgrades)
+- [14. Troubleshooting](#14-troubleshooting)
+- [15. Tests and source map](#15-tests-and-source-map)
+- [16. Documentation and diagram index](#16-documentation-and-diagram-index)
+
+## 1. Runtime overview
+
+An **Execution Container** here means an application JVM, not a Docker container. Multiple ECs can run on one machine, each with its own services, application port, memory, and failure boundary. The repository builds executable JARs and optionally a macOS application bundle; it does not supply Docker/OCI images or a Compose deployment.
+
+| Component | Purpose | Default identity / endpoint |
+| --- | --- | --- |
+| Installer shell | Validates installation paths and launches PLATFORM/WATCHDOG | `java -jar mediation-engine.jar` |
+| PLATFORM | Coordinates configured ECs, receives health, routes lifecycle operations to watchdogs | `platform`; application `127.0.0.1:15000`, control `127.0.0.1:15001` |
+| WATCHDOG | Starts, stops, restarts, and reattaches to local EC processes | `wdg01`; connects outbound to PLATFORM control port |
+| Execution Container 1 | Independent service execution JVM | `ec01`; application `127.0.0.1:5100` |
+| Execution Container 2 | Independent service execution JVM | `ec02`; application `127.0.0.1:10000` |
+| Desktop GUI | Swing client connecting to PLATFORM's application endpoint | `127.0.0.1:15000`; integration in progress |
+| H2 database | File-backed platform metadata and configured tables | `data/fileprocessor` beneath installation home |
+
+![Default local deployment with separate JVMs and ports](docs/images/04-local-deployment.svg)
+
+The control port `15001` in EC and watchdog configurations identifies **PLATFORM's control listener**. It does not mean every JVM binds its own listener on that port.
+
+## 2. Prerequisites and build
+
+Use a full **JDK 25**. The project requests Java 25 through Gradle toolchains; the macOS packaging script also requires `jpackage`. The checked-in Gradle wrapper selects **Gradle 9.1.0**, so a separate Gradle installation is unnecessary. The first build requires access to the Gradle distribution and Maven Central. Bash is needed for the deployment scripts; `nc` is useful for management commands.
+
+On macOS, select an installed JDK 25:
+
+```sh
+export JAVA_HOME="$(/usr/libexec/java_home -v 25)"
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version
+./gradlew --version
 ```
 
-A report should include enough diagnostic information for PLATFORM to make an informed supervision decision without requiring ordinary application traffic to pass through PLATFORM.
+On Linux or another platform, set `JAVA_HOME` to your JDK 25 directory and add its `bin` directory to `PATH`. The Java build is separate from the macOS-specific packaging script.
 
----
+From the repository root:
 
-## 8. Architectural boundaries and design principles
+```sh
+./gradlew clean test shadowJar desktopJar
+```
 
-### Control plane and data plane are separate
+| Artifact | Entry point | Use |
+| --- | --- | --- |
+| `build/libs/mediation-engine.jar` | `org.prats.Main` | Installer shell; also contains PLATFORM, WATCHDOG, and EC initializers |
+| `build/libs/mediation-desktop.jar` | `org.prats.desktop.DesktopApplication` | Standalone Swing login client |
 
-- **Control plane:** PLATFORM, WATCHDOG supervision and lifecycle coordination.
-- **Data plane:** direct EC-to-EC communication and request/workflow execution.
+Both are shaded JARs containing their dependencies. Building them does not install configuration or launch any services.
 
-PLATFORM coordinates the system; it should not proxy routine application messages.
+The main dependencies are Typesafe Config for HOCON, Jackson for message serialization, HikariCP for connection pooling, H2 for local persistence, Commons CSV for CSV parsing, and Logback for logging. See [build.gradle](build.gradle) for exact versions.
 
-### Keep service responsibilities narrow
+## 3. Install from source
 
-- TCP Service owns transport.
-- Message Service owns message orchestration.
-- Processors own their specific stages of the message lifecycle.
-- Forwarders own target-service routing.
-- Business services own domain logic.
-- Database Service owns managed database access.
-- Health Service observes and reports health.
-- Container Service owns in-process service management.
+### 3.1 Create an installation home
 
-### Decouple request processing from response transport
+The source checkout and runtime installation are separate directories. These examples use the deployment scripts' default destination:
 
-The `ReplyChannel` abstraction allows the response path to return a result without coupling business handlers to TCP sockets or any one transport.
+```sh
+export MEDIATION_INSTALL_DIR="$HOME/Desktop/MediationEngine"
+mkdir -p "$MEDIATION_INSTALL_DIR/conf" "$MEDIATION_INSTALL_DIR/data" "$MEDIATION_INSTALL_DIR/logs" "$MEDIATION_INSTALL_DIR/run"
+cp build/libs/mediation-engine.jar build/libs/mediation-desktop.jar "$MEDIATION_INSTALL_DIR/"
+bash ./deploy-conf.sh
+```
 
-### Separate service recovery from process recovery
+Run these commands from the repository root after building. `deploy-conf.sh` honors `MEDIATION_INSTALL_DIR`; if unset, it uses `~/Desktop/MediationEngine`.
 
-A failed service may be recoverable inside the EC. A failed or unrecoverable EC requires process-level supervision coordinated by PLATFORM and carried out through WATCHDOG.
+The configuration script copies the source configuration tree and installer path configuration. **Rerunning it overwrites matching installed configuration files.** Preserve local changes before using it during an upgrade. It does not deploy JARs or erase the runtime's data/log directories.
 
-### Design for long-running operation
-
-Registries, executors, connection pools, schedulers and network resources need explicit lifecycle ownership, bounded capacity, expiry/cleanup policies and observable metrics.
-
----
-
-## 9. End-to-end request example
-
-Consider a request arriving at EC-A over TCP and being handled by a business service inside that EC.
+### 3.2 Installation layout
 
 ```text
-Client / Peer
-    |
-    v
-TCP Service
-    |
-    v
-TCP Application Process
-    |
-    v
-Message Dispatcher
-    |
-    v
-Input Processor
-    |
-    +---- cannot decode ----> Command Processor
-    |                             |
-    |                             +---- unknown ----> Unknown Command Reply
-    |                             |
-    |                             +---- recognized -> Input Processor
-    |
-    v
-Request Processor
-    |
-    +---- create correlation entry (request -> ReplyChannel/context)
-    |
-    v
-Forwarder
-    |
-    v
-Target Business Service
-    |
-    v
-Service Handler
-    |
-    v
-Response
-    |
-    v
-Response Processor
-    |
-    +---- lookup correlation entry
-    +---- obtain original ReplyChannel
-    +---- complete/remove correlation state
-    |
-    v
-ReplyChannel (TCP / EC / PLATFORM / other supported channel)
-    |
-    v
-Original requester
+MediationEngine/
+├── mediation-engine.jar
+├── mediation-desktop.jar
+├── conf/
+│   ├── installer/allFilePath.conf
+│   ├── applicationConfigs/application.conf
+│   ├── containerConfigs/
+│   │   ├── platformConfigs/platform.conf
+│   │   ├── watchdogConfigs/wdg1.conf
+│   │   └── ecConfigs/
+│   │       ├── ec1.conf
+│   │       └── ec2.conf
+│   └── databaseConfigs/
+│       ├── table_database.conf
+│       ├── tableConfigs/
+│       └── tabConfigs/
+├── data/       # H2 files and persistent runtime data
+├── logs/       # Application logs and configured JVM diagnostic files
+└── run/        # EC process identity files, created at runtime
 ```
 
-The key property is that the business handler does not need to know whether the original request came from TCP, another EC or another supported channel. The Message Service preserves the reply context and resolves the destination when the response is ready.
+`ApplicationPaths` selects home from `-Dmediation.home`, or from the packaged JAR's parent directory when the property is absent. Home must exist. Relative application paths resolve beneath it; paths escaping it are rejected. Keep configuration, referenced JARs, and runtime files inside this home.
 
----
+### 3.3 Optional macOS application bundle
 
-## 10. Further architecture diagrams
+Once the installation directory exists:
 
-The following diagrams are included in this repository under `docs/images/`.
+```sh
+bash ./deploy-local.sh
+```
 
-### Distributed deployment
+This script selects Java 25, runs `clean test shadowJar desktopJar`, builds a `jpackage --type app-image` bundle with a bundled runtime, copies both JARs into the installation, and updates `/Applications/Mediation Engine.app`.
 
-![Distributed deployment architecture](docs/images/01-high-level-architecture.png)
+To use different destinations:
 
-Shows PLATFORM, worker machines, WATCHDOGs, ECs and the separation between peer-to-peer communication and supervision.
+```sh
+MEDIATION_INSTALL_DIR="$HOME/Desktop/MediationEngine" \
+MEDIATION_APP_DIR="$HOME/Applications/Mediation Engine.app" \
+bash ./deploy-local.sh
+```
 
-### Execution Container JVM internals
+The destination's parent directory must exist and be writable. This is a macOS packaging path, not a general Linux installer. The script does not deploy configuration, run `integrationTest`, or restart running services.
+
+## 4. Launch and verify the services
+
+### 4.1 Start the installer shell
+
+```sh
+cd "$MEDIATION_INSTALL_DIR"
+java -Dmediation.home="$MEDIATION_INSTALL_DIR" -jar mediation-engine.jar
+```
+
+If using a fresh terminal, set `MEDIATION_INSTALL_DIR` again before running this command.
+
+At the installer prompt, enter these commands **one at a time**:
+
+```text
+mng paths
+mng validate
+mng start platform
+mng start watchdog
+```
+
+Start PLATFORM first, then WATCHDOG. The installer launches separate JVMs using each configuration's main class and JVM arguments. Child processes inherit the installer's I/O and use the installation home as their working directory. Wait for successful startup and inspect logs before continuing. Installation validation checks required resources and files; it is not an end-to-end health check.
+
+The installer can then be closed with:
+
+```text
+mng exit
+```
+
+This exits the shell; it does not explicitly stop the JVMs it launched. Terminal/session supervisors can still affect process lifetimes, so use an OS service manager for unattended operation.
+
+> If launchd or another service manager already runs PLATFORM or WATCHDOG, manage those existing processes instead of launching duplicates. The installer is a launcher, not a check for an already-running deployment.
+
+### 4.2 Connect to PLATFORM and start ECs
+
+In another terminal:
+
+```sh
+nc 127.0.0.1 15000
+```
+
+Enter runtime commands:
+
+```text
+mng help
+mng status
+mng start ec ec01
+mng start ec ec02
+```
+
+PLATFORM routes EC lifecycle requests to the watchdog configured to own that EC. WATCHDOG launches the EC with its configured Java arguments and records its process identity. ECs then establish their own PLATFORM control connections and begin reporting health.
+
+Starting WATCHDOG does not itself mean that all configured ECs have started. Use the explicit EC commands and verify the resulting state.
+
+### 4.3 Verify the runtime
+
+After allowing at least one heartbeat interval (15 seconds):
+
+```text
+mng health report platform
+mng health report ec01
+mng health report ec02
+```
+
+Check that the platform reports its services and that EC reports contain recent heartbeat data. A launched PID, an open port, and a healthy service report are different observations; verify the latter as well.
+
+To inspect an EC directly:
+
+```sh
+nc 127.0.0.1 5100
+```
+
+```text
+mng status
+mng health report ec01
+```
+
+### 4.4 Installer commands versus runtime commands
+
+These are separate interfaces:
+
+| Interface | Commands | Scope |
+| --- | --- | --- |
+| Installer shell | `mng help`, `mng paths`, `mng validate`, `mng start platform`, `mng start watchdog`, `mng exit` | Installation and launching supervisor JVMs |
+| PLATFORM application TCP connection | `mng start ec <id>`, `mng stop ec <id>`, `mng restart ec <id>` | EC process lifecycle via WATCHDOG |
+| PLATFORM or direct EC application connection | `mng status`, `mng health report <id>`, `mng restart services all`, `mng shutdown services all`, `mng kill` | Connected JVM and its services, with platform-specific remote health support |
+
+Runtime commands require the `mng` prefix. Keywords are case insensitive; use the configured case for EC IDs. `mng kill` terminates the connected JVM; `mng shutdown services all` shuts down internal services and can also remove the connection needed to manage them. A service manager may restart a terminated JVM.
+
+## 5. Desktop GUI and its PLATFORM connection
+
+Launch the desktop independently of the engine services:
+
+```sh
+java -jar "$MEDIATION_INSTALL_DIR/mediation-desktop.jar"
+```
+
+Or open the packaged **Mediation Engine** macOS app after running `deploy-local.sh`.
+
+The GUI is a client of **PLATFORM**, not a watchdog or EC console. Enter PLATFORM's application endpoint, normally `127.0.0.1:15000`, in the login screen. `DesktopConnectionManager` accepts `host:port` and bracketed IPv6 endpoints such as `[::1]:15000`.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant GUI as Swing GUI
+    participant Conn as DesktopConnectionManager
+    participant Platform as PLATFORM application endpoint
+    User->>GUI: Enter endpoint and credentials
+    GUI->>Conn: attemptConnectionAsync(host:port)
+    Conn->>Platform: TCP connect and protocol handshake
+    Platform-->>Conn: Handshake response
+    Conn-->>GUI: Connection established
+    GUI->>Platform: Correlated authentication request
+    Note over GUI,Platform: Server authentication/GUI routing is incomplete in this checkout
+```
+
+The connection manager reuses the shared `TCPService` in client-only mode: it creates an outbound connection rather than opening a local server socket. `LoginController` sequences connection, handshake, and authentication asynchronously. Responses use correlation IDs and futures; UI updates return to Swing's event-dispatch thread.
+
+**Connection and login are separate steps.** A completed handshake confirms the transport/protocol connection. Authentication additionally requires a wired server route, a matching account schema, credential validation, and session creation. `AuthenticationHandler` and `AuthenticationService` contain server-side functionality, but `PlatformInitializer` currently does not connect that service to `MessageProcessor`. `GUIForwarder` is also a no-op. Do not assume that login, account management, a monitoring dashboard, or diagnostic actions work end to end in this revision. No ready-to-use default GUI account is documented here.
+
+Use the TCP management interface to operate the runtime while those integration paths are being completed.
+
+## 6. Configuration guide
+
+Configuration uses HOCON and is external to the packaged JAR. Edit the **installed** files for the deployed runtime; editing source resources alone does not change an existing installation.
+
+| File beneath installation home | What it controls |
+| --- | --- |
+| `conf/installer/allFilePath.conf` | Installer's platform, watchdog, database paths and embedded welcome/help resource names |
+| `conf/containerConfigs/platformConfigs/platform.conf` | PLATFORM identity, bind addresses, ports, JVM options, database config, EC inventory, watchdog inventory |
+| `conf/containerConfigs/watchdogConfigs/wdg1.conf` | WATCHDOG identity, PLATFORM control endpoint, local EC definitions, JVM options |
+| `conf/containerConfigs/ecConfigs/ec1.conf` / `ec2.conf` | EC identity, application bind/port, PLATFORM endpoint, peer ECs, optional database, JVM options |
+| `conf/databaseConfigs/table_database.conf` | Database URL, credentials, connection limits, table configuration paths |
+| `conf/databaseConfigs/tableConfigs/*.conf` | Table identifiers, fields, types, required/primary-key metadata |
+| `conf/applicationConfigs/application.conf` | Logging configuration resource; check the relevant logging code before assuming it overrides JVM properties |
+
+### Important fields
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable configured identity used by management commands and peer registration |
+| `tcp-bind-host` | Interface on which the application listener accepts connections |
+| `tcp-port` | Application listener port; must be distinct for JVMs sharing a host/interface |
+| `control-bind-host` | PLATFORM control listener interface |
+| `platform-host` / `platform-control-port` | WATCHDOG's destination for PLATFORM control traffic |
+| EC `platform-host` / `control-port` | EC's PLATFORM control destination |
+| `main-class` / `class-path` | Java entry point and engine JAR path used by `ContainerLauncher` |
+| `jvm-args` | Per-process heap, collector, logging, and other Java options |
+| `db-configured` / `database-conf` | Whether an EC initializes its own database service and where its configuration lives |
+| `ec-configs` | Configured EC/peer inventory; its role depends on the containing file |
+| `watchdog-configs` | Watchdogs PLATFORM can use for EC lifecycle operations |
+
+The supplied ECs have `db-configured = false`; PLATFORM initializes the configured H2 database. Do not give multiple JVMs the same embedded file database and assume concurrent independent ownership works. An EC needing persistence should have a deliberately configured database and storage ownership model.
+
+The default database configuration uses `jdbc:h2:file:./data/fileprocessor`, user `sa`, an empty password, and a maximum pool size of 10. Launched engine JVMs run from application home, so that relative URL resolves under the installation. Table metadata includes batch agents and users; inspect table definitions and handler expectations when changing schemas.
+
+### Application home and installer path override
+
+```sh
+java -Dmediation.home="$MEDIATION_INSTALL_DIR" \
+     -Dmediation.paths=conf/installer/allFilePath.conf \
+     -jar "$MEDIATION_INSTALL_DIR/mediation-engine.jar"
+```
+
+Use `-Dmediation.paths` for an alternative installer path configuration inside home. `org.prats.Main` launches the shell without forwarding its command-line arguments, so a positional path after `-jar` is not the documented override mechanism.
+
+### Multi-machine configuration
+
+The supplied configuration is a single-machine loopback deployment. To extend it:
+
+1. Install the engine JAR, configuration, and JDK on every participating machine.
+2. Assign unique EC/watchdog identities and appropriate application ports.
+3. Make PLATFORM's control listener reachable from workers; change worker `platform-host` values accordingly.
+4. Set EC bind addresses and peer hosts to reachable addresses where direct peer traffic is needed.
+5. Keep PLATFORM's inventory and each watchdog's locally owned EC inventory consistent. PLATFORM reads configured watchdog files to build ownership information, so referenced configuration files must also exist beneath PLATFORM's home.
+6. Keep each watchdog's EC launch paths valid on that worker; a remote machine cannot use a local filesystem path merely because PLATFORM knows it.
+7. Start PLATFORM, then worker watchdogs, then ECs, and verify fresh health reports.
+
+TCP is not encrypted, and management commands run without an account session. The loopback defaults are suitable for local access. Use a trusted network/tunnel or add transport security and appropriate access controls before exposing listeners remotely.
+
+## 7. Overall distributed architecture
+
+![Distributed PLATFORM, WATCHDOG, and EC architecture](docs/images/01-high-level-architecture.png)
+
+The image illustrates a deployment pattern; its machine/container count is not a fixed runtime requirement.
+
+### Control plane
+
+PLATFORM knows the configured ECs and their watchdog ownership. WATCHDOG connects to PLATFORM to receive process operations. Each EC also connects directly to PLATFORM to report health and participate in control communication.
+
+An operator's `mng restart ec ec01` travels through PLATFORM to the owning WATCHDOG. WATCHDOG stops and relaunches the operating-system process. PLATFORM does not need to execute remote operating-system process operations itself.
+
+### Data plane
+
+ECs have application listeners and configured peer connections. Peer application traffic can go directly between ECs without passing through PLATFORM. PLATFORM remains the coordination point; it is not intended to proxy every domain message.
+
+EC application code does not address WATCHDOG. WATCHDOG's process ownership and an EC's application processing are separate concerns.
+
+![EC lifecycle command and heartbeat paths](docs/images/06-ec-lifecycle.svg)
+
+### Failure boundaries
+
+Each EC, PLATFORM, and WATCHDOG is a separate JVM. A service fault can sometimes be recovered inside its JVM. A JVM failure requires an external supervisor. Restarting an EC interrupts that EC's sockets and in-flight work; the in-memory registries are not durable request storage.
+
+## 8. Internal JVM architecture
 
 ![Execution Container JVM internals](docs/images/02-execution-container-jvm-internals.png)
 
-Shows the TCP-to-message-to-service request path, response correlation, reply channels, registries and a representative threading model.
+Initializers act as composition roots: they parse startup arguments and configuration, create registries, construct services and processors, connect forwarders/handlers, register services, and invoke the container lifecycle manager.
 
-### Core services and health management
+| Initializer | Role |
+| --- | --- |
+| `PlatformInitializer` | Builds platform database/message/health/transport infrastructure, external health monitoring, watchdog ownership mapping, and platform command routing |
+| `ExecutionContainerInitializer` | Builds EC message/health/transport infrastructure, optional database service, peer connections, control handler, command routing, and process identity |
+| `WatchdogInitializer` | Builds the local process supervisor and its outbound PLATFORM transport |
 
-![Execution Container core services](docs/images/03-execution-container-core-services.png)
+`ContainerLauncher` translates HOCON definitions into JVM and application arguments. `JVMLauncher` starts the child using the launching JVM's Java executable, adds `mediation.home`, sets the child's working directory to home, and inherits I/O. This is why selecting Java 25 before launching the installer matters.
 
-Shows Container Service, Health Service, Database Service, Message Service, business services and the health/recovery relationship with PLATFORM.
+Service instances share registries and message infrastructure **within one JVM**. They do not share Java objects across JVMs; cross-process interactions use serialized TCP messages.
 
----
+![Core EC services and management relationships](docs/images/03-execution-container-core-services.png)
 
-## Summary
+The existing architecture images describe logical responsibilities. The following service descriptions distinguish concrete classes and current wiring from future domain extensions.
 
-The Mediation Engine is designed as a distributed runtime in which each Execution Container is an independently running JVM with its own service lifecycle, message-processing pipeline, registries and execution resources.
+## 9. Services and their responsibilities
 
-PLATFORM coordinates the distributed system. WATCHDOG supervises local EC processes. Container Service manages the services inside an EC. Message Service orchestrates request/response processing. Domain services execute the actual work. Direct EC-to-EC communication keeps the data plane independent of the platform control plane.
+### Container Service: lifecycle ownership inside a JVM
 
-The result is a separation of concerns across **deployment supervision, container management, message orchestration and business execution**—a foundation for scaling the runtime across machines while keeping individual components independently manageable.
+**Classes:** `ContainerService`, `ExecutionContainerService`, `PlatformService`.
+
+The container service manages registered services inside its JVM. It starts them, coordinates service shutdown/restart, manages internal health evaluation, and provides command handling. `ContainerServiceRegistry` records which service instances belong to that JVM.
+
+It is the bridge between service-level health and the container's overall state. A TCP service failure and a database failure are independent observations; the manager evaluates them without treating unrelated failure counts as one service's recovery history.
+
+`ExecutionContainerService` specializes this manager for ECs. It dispatches local commands through `ExecutionContainerCommandHandler`, passes control requests to `ECControlHandler`, and schedules health-checker evaluation and heartbeat transmission. Heartbeats contain the EC's service/overall health and go directly to PLATFORM.
+
+`PlatformService` specializes it for the control plane. In addition to local service management, it uses `ExternalHealthMonitor`, the EC inventory, and watchdog mappings to support distributed management. Its command handler delegates EC process operations to `PlatformControlHandler`.
+
+**Boundary:** Restarting a service is an in-process lifecycle action. Restarting an EC is an operating-system process action performed through WATCHDOG. The container manager is not the general data-plane broker for business requests.
+
+### TCP Service: transport and connection ownership
+
+**Class:** `TCPService`; collaborators include `TCPProtocolProcessor`, `TCPApplicationProcessor`, `TCPHandshakeManager`, and `ClientConnection`.
+
+TCP Service owns socket transport: accepting connections when in server mode, connecting to configured peers, framing inbound lines, scheduling reads/writes, enforcing connection/frame/output limits, and closing failed or idle connections.
+
+Application and control traffic have distinct processing paths. Application traffic is handed into the message pipeline. Protocol/control processors handle peer handshakes, correlated control exchanges, heartbeats, and lifecycle traffic according to the configured handler.
+
+The desktop also uses this shared service in `CLIENT_ONLY` mode. Reusing transport does not cause the desktop to start an EC or database.
+
+**Boundary:** TCP handles delivery, not SQL execution, credentials, or domain routing. A socket connection alone does not prove the remote services are healthy.
+
+### Message Service: asynchronous orchestration
+
+**Class:** `MessageService`; collaborators are `RequestProcessor`, `MessageProcessor`, `CommandProcessor`, and `ResponseProcessor`.
+
+Message Service receives request/response work through the dispatcher interface and schedules it onto controlled execution resources. Request processing records a reply channel and routes by operation. Response processing finds the original request context and delivers the result without making a database or command handler own a socket.
+
+It also drives correlation expiration and failed-response retry maintenance. Request work and response/maintenance work use separate admission resources so overloaded request handling does not consume all capacity needed to finish existing work.
+
+**Boundary:** It orchestrates work. Domain logic belongs in the selected service/handler. The implementation uses `RequestProcessor` and `MessageProcessor`; there is no separate `InputProcessor` class in this checkout.
+
+### Health Service: internal observation
+
+**Class:** `HealthService`; collaborators include `HealthReportAnalyzer`, `HealthReportFormatter`, and registered `HealthCheckable` services.
+
+Health Service collects service health and exposes a consolidated view to the container manager. Its purpose is to report whether the JVM's components are operating and provide details for diagnosis/recovery. Container managers also periodically evaluate the health checker itself, since a failed observer must not silently imply a healthy system.
+
+The EC manager schedules heartbeat sending separately from health collection. PLATFORM receives these reports through the control plane and stores them via external monitoring infrastructure.
+
+**Boundary:** Observation, local service lifecycle, and remote process supervision are separate layers. Health Service does not directly kill remote JVMs.
+
+### Database Service: managed persistence
+
+**Class:** `DatabaseService`; collaborators include `DatabaseForwarder`, `DatabaseRequestHandler`, `HikariDBConnectionPool`, `H2DatabaseResourceManager`, `H2TableInitializer`, and SQL helpers.
+
+Database Service provides the service lifecycle/execution boundary for database work. `DatabaseForwarder` submits database operations to it; `DatabaseRequestHandler` interprets structured database requests and performs the database interaction. The Hikari pool owns reusable connections, while resource/table helpers load database/table configuration and initialize configured structures.
+
+Operations routed here include `FETCH`, `SEARCH`, `CREATE`, `UPDATE`, and `DELETE`. Query/update results use dedicated payload records rather than arbitrary transport-specific replies. JDBC resources and connection pools must be cleaned up during shutdown.
+
+PLATFORM initializes the configured database service. ECs initialize one only when configured to do so. The supplied resource manager and URL use H2; other databases should not be described as ready-to-use backends without implementing and validating their configuration, driver, and schema behavior.
+
+**Boundary:** Other services should use managed database requests/resources instead of silently creating unrelated pools. The database handler does not decide how to return a TCP response.
+
+### Authentication Service: account and session work, integration pending
+
+**Classes:** `AuthenticationService`, `AuthenticationHandler`, `InMemorySessionManager`, `PasswordHasher`.
+
+Authentication Service supplies the worker/lifecycle boundary for authentication. AuthenticationHandler contains credential validation, account creation, logout, and authorization-related behavior. It uses structured database requests for account data and a session manager for runtime sessions. Password hashing belongs to security code rather than the Swing UI or TCP service.
+
+The handler recognizes login/authentication, user creation, and logout operations; account creation requires an existing privileged session. An in-memory session is process-local and does not become a durable identity store simply because accounts are persisted.
+
+**Current wiring:** `MessageProcessor` exposes an authentication-forwarder slot, but `PlatformInitializer` does not set it or register AuthenticationService. These classes describe available implementation pieces, not a completed GUI login flow. The current sample user table also needs to be checked against the handler's expected account schema before provisioning accounts.
+
+### WATCHDOG Service: local process supervision
+
+**Class:** `WatchdogService`; collaborators include `ContainerLauncher`, `JVMLauncher`, and `ECProcessIdentityStore`.
+
+WATCHDOG owns process handles for the ECs assigned to its machine. It validates lifecycle requests against its configured EC inventory, serializes local supervision work, starts EC JVMs, stops them, and performs restart as stop followed by start.
+
+It can recover ownership of still-running ECs after a watchdog restart using verified process identities. It does not initialize the full EC database/message/health stack merely to supervise a process.
+
+**Boundary:** WATCHDOG is not an EC application endpoint. ECs report directly to PLATFORM and do not send their domain requests to WATCHDOG. Keeping watchdog ownership separate allows a healthy EC to outlive a watchdog restart when the OS supervisor permits it.
+
+### GUI routing and future domain services
+
+`GUIForwarder` is the current extension point for GUI operations but its `forward()` implementation is empty. `MessageProcessor` also has optional diagnostic routing, which is not connected by the current platform initializer. There is no implemented `GUIService` or `DiagnosticsService` class in this checkout.
+
+A future business service should provide lifecycle and health behavior, accept admitted work, run its handler, and return results through Message Service. File-processing, workflow, or mediation-specific services can fit that structure, but the generic service architecture should not be mistaken for a completed business workflow product. Utilities such as `FileHandler` are helpers, not independently managed services.
+
+## 10. Message processing in detail
+
+![Concrete request and response pipeline inside a JVM](docs/images/05-message-pipeline.svg)
+
+### Normal application request
+
+1. `TCPService` reads a framed message from a socket.
+2. `TCPApplicationProcessor` parses/normalizes it and hands it to the message dispatcher with a reply channel.
+3. `MessageService` schedules request processing.
+4. `RequestProcessor` records the correlation ID and reply destination for a valid request.
+5. `MessageProcessor` selects a forwarder using the operation.
+6. The selected service admits the work and invokes its handler.
+7. The result returns through Message Service's response path.
+8. `ResponseProcessor` resolves the saved reply context and attempts delivery through its `ReplyChannel`.
+9. Terminal completion, expiry, or disconnect releases correlation state; failed delivery can enter bounded retry handling.
+
+`TCPReplyChannel` returns over a network connection. `FutureReplyChannel` completes an asynchronous in-JVM future. A handler can therefore return a result without knowing whether its caller was a TCP client or another local component.
+
+### Plain management command
+
+Unparsed input with unknown operation/type goes to `CommandProcessor`, which uses `CommandParser` to interpret commands such as `mng status`. Recognized commands re-enter the normal correlated command path and reach `CommandForwarder` plus the container's command handler. Unrecognized input produces an error instead of becoming ordinary database/business work.
+
+### EC lifecycle request
+
+```mermaid
+sequenceDiagram
+    participant Operator
+    participant Platform as PLATFORM
+    participant Watchdog as Owning WATCHDOG
+    participant EC as EC JVM
+    Operator->>Platform: mng start ec ec01
+    Platform->>Watchdog: Correlated lifecycle request
+    Watchdog->>EC: Launch JVM from EC configuration
+    Watchdog-->>Platform: Process launch result / PID
+    Platform-->>Operator: Lifecycle response
+    EC->>Platform: Control connection and heartbeat
+    Note over Platform,EC: Process launch result precedes proof of healthy execution
+```
+
+### Message envelope and payloads
+
+`Message` is the common envelope; records in `org.prats.definitions.records` supply typed payloads. Correlation IDs connect asynchronous requests and responses. Operation/message type select processing; completion state distinguishes progress from terminal results.
+
+| Payload | Purpose |
+| --- | --- |
+| `CommandRequest` / `CommandResponse` | Management command body and result |
+| `HandshakePayload` | Peer protocol handshake |
+| `ControlRequest` / `ControlResponse` | EC lifecycle target and progress/result |
+| `DatabaseRequest`, `QueryResponse`, `UpdateResponse` | Structured persistence requests and typed results |
+| `LoginRequest` / `LoginResponse` | Authentication contract, pending end-to-end server wiring |
+| `HealthReport`, `ConsolidatedHealthReport`, `ContainerHeartbeat` | Internal and external health observations |
+
+Use `MessageParser.toPayload` / `fromPayload` for record conversion. Failures use the envelope's `error.errorCode` and `error.errorMessage`; consumers should check `hasError()` before decoding success payloads. See [message contracts](docs/message-contracts.md).
+
+## 11. Registries, threading, and capacity
+
+### In-memory registries
+
+| Registry | Purpose | Lifetime / ownership |
+| --- | --- | --- |
+| `ContainerServiceRegistry` | Tracks services owned by a container manager | One JVM's service lifecycle |
+| `CorrelationRegistry` | Maps application requests to reply channels and creation times | In-flight work; removed after final response, expiry, or connection cleanup |
+| `TCPCorrelationRegistry` | Tracks transport/control exchanges and pending replies | Per-process TCP request lifecycle |
+| `RetryRegistry` | Retains failed response deliveries for bounded retry | Attempt-, age-, count-, and byte-limited |
+| `HeartbeatRegistry` | Keeps recent external heartbeat observations/history | PLATFORM monitoring with TTL semantics |
+| `PlatformControlRegistry` | Tracks control-plane peer connections | Connected peers in that JVM |
+| `SessionRegistry` / session manager | Authentication session state | In-memory account/session infrastructure |
+
+These registries are not a persistent queue, a distributed shared-memory system, or an exactly-once processing guarantee. A JVM restart loses its in-flight state.
+
+### Execution resources
+
+Transport I/O, application requests, response/maintenance work, service handlers, and scheduled health tasks have distinct responsibilities. `ThreadPool` can construct platform-thread pools or virtual-thread-per-task executors. `AdmissionExecutor` limits the sum of queued and running admitted work; virtual threads do not remove that limit.
+
+For virtual-thread executors, core/max platform-thread sizing values do not act as a virtual-thread pool size. Database connections, sockets, request capacity, and downstream throughput still require independent bounds.
+
+### Runtime properties
+
+Properties must be supplied to the JVM they should configure. Put them in that process's `jvm-args` array for launches through `ContainerLauncher`; custom `-D` flags on the installer are not automatically copied to all children.
+
+| JVM property | Default | Bounds |
+| --- | ---: | --- |
+| `mediation.admission.max-tasks` | 1024 | Queued plus running tasks per admission-controlled pool |
+| `mediation.correlation.limit` | 4096 | Application correlation entries |
+| `mediation.correlation.control-limit` | 1024 | Control correlation entries |
+| `mediation.retry.limit` | 1024 | Pending failed-delivery entries |
+| `mediation.retry.max-bytes` | 16777216 | Estimated retained retry payload bytes |
+| `mediation.tcp.max-connections` | 256 | Accepted connections per TCP service |
+| `mediation.tcp.max-frame-chars` | 65536 | Incoming line length |
+| `mediation.tcp.max-outbound-bytes` | 16777216 | Estimated queued outbound payload bytes per TCP service |
+| `mediation.tcp.write-timeout-seconds` | 10 | Slow-client write timeout |
+| `mediation.tcp.read-idle-seconds` | 300 | Accepted application connection idle timeout |
+
+For example, add `"-Dmediation.admission.max-tasks=512"` to an EC's `jvm-args` and restart that EC. These values are defensive defaults, not measured capacity guarantees. Tune against representative traffic and failure tests.
+
+## 12. Health, recovery, and process identity
+
+Health has three layers:
+
+1. **Inside the JVM:** Health Service observes registered components; Container Service evaluates and coordinates local service recovery.
+2. **Across JVMs:** ECs send heartbeats directly to PLATFORM every 15 seconds. PLATFORM aggregates observations through `ExternalHealthMonitor` and checks missing heartbeats.
+3. **At the operating-system level:** WATCHDOG owns EC process operations; an external OS supervisor can keep PLATFORM and WATCHDOG running.
+
+`mng health report ec01` on PLATFORM returns the **latest stored heartbeat**, not an on-demand probe. After 45 seconds without a heartbeat, reports are stale and current health is unknown. Immediately after PLATFORM restart, allow EC reconnection and a new heartbeat. A missing observation should not be read as proof that a process is dead or healthy.
+
+An EC writes `run/<ec-id>.process.properties` atomically beneath installation home. Its identity includes PID, start instant, EC ID, and home. WATCHDOG verifies liveness, start time, and JVM identity before reattaching; a leftover file alone does not prove a process is running. Duplicate ambiguous identities are rejected. Adopted processes can later be stopped/restarted using `ProcessHandle`.
+
+On macOS, a watchdog LaunchAgent should include:
+
+```xml
+<key>AbandonProcessGroup</key>
+<true/>
+```
+
+This allows ECs to survive a watchdog exit rather than being killed with its process group. [ops/prepare_watchdog_agent.py](ops/prepare_watchdog_agent.py) prepares an updated definition beneath `build/launchd/`; it does not install or reload the running job. Read the script and [operations notes](docs/desktop-and-operations.md#watchdog-recovery-and-identity-files) before applying it to an existing LaunchAgent. Reloading a job still using the old process-group behavior can require restarting affected ECs during that migration.
+
+## 13. Operations and upgrades
+
+### Start, stop, and restart an EC
+
+Connect to PLATFORM with `nc 127.0.0.1 15000`, then use:
+
+```text
+mng start ec ec01
+mng stop ec ec01
+mng restart ec ec01
+```
+
+Use configured identities, not filenames (`ec01`, not `ec1.conf`). Allow reconnection/heartbeat time after a restart before judging health.
+
+### Upgrade the runtime
+
+1. Build and validate the new artifacts.
+2. Preserve installed configuration and back up persistent data with the database owner stopped or using a database-supported backup mechanism.
+3. Copy the new JARs, or run `deploy-local.sh` for macOS packaging. That script stages each JAR as `.next` before renaming it into place.
+4. Apply deliberate configuration changes. Avoid blindly overwriting local files with `deploy-conf.sh`.
+5. Restart affected JVMs through their owning supervisor and verify health. Replacing a JAR does not reload already-running classes. Restarting PLATFORM also requires workers to reconnect before remote reports are fresh.
+6. Reopen the desktop app to load the new GUI artifact.
+
+If shutting down the whole deployment manually, stop ECs through PLATFORM first, then stop WATCHDOG and PLATFORM through their process supervisor. Managed JVMs can be automatically relaunched if their supervisor remains enabled.
+
+### Logs and JVM diagnostics
+
+Inspect `logs/` beneath installation home and the terminal/service-manager output. JVM options in the supplied platform and EC files configure heap dumps, fatal error files, rotating GC/safepoint logs, and rolling Flight Recorder recordings. These are distinct from application log rotation.
+
+Each supplied PLATFORM/EC/WATCHDOG definition requests `-Xms256m` and `-Xmx768m`. With PLATFORM, WATCHDOG, and two ECs, the configured maximum heap alone totals about 3 GiB; native memory, threads, buffers, the desktop, and the OS require additional memory.
+
+PLATFORM uses ZGC in the sample configuration, while ECs and WATCHDOG use G1. Collector/heap settings are per JVM. Inspect configuration before changing memory or diagnostic paths. The supplied `ec2.conf` JFR filename currently starts with `ec01`; correct that label in your installed configuration if you want filenames to match EC identity.
+
+## 14. Troubleshooting
+
+| Symptom | Checks and resolution |
+| --- | --- |
+| Build cannot find the requested Java toolchain | Check `java -version`, `JAVA_HOME`, and `./gradlew --version`; select a full JDK 25 |
+| Installer cannot read path configuration | Verify home exists and `conf/installer/allFilePath.conf` was deployed; use `-Dmediation.home` and `mng paths` |
+| Path escapes application directory | Move referenced files beneath installation home and use home-relative paths |
+| `Address already in use` | Check existing PLATFORM/EC processes or OS-managed jobs; do not launch duplicate instances; verify distinct application ports |
+| Cannot connect to `15000` | Confirm PLATFORM started, inspect its bind address and startup logs, and verify the application port rather than control port |
+| EC start fails | Confirm WATCHDOG is connected, EC ID matches inventory, config/JAR exists on its owning worker, and Java/log/data paths are usable |
+| PLATFORM has no EC health report | Allow the first 15-second heartbeat, check EC control connectivity and PLATFORM address, then inspect EC logs |
+| Report is STALE | The heartbeat is older than 45 seconds; inspect process and control channel before assuming the EC has exited |
+| GUI connects but login does not finish | Current platform authentication/GUI wiring is incomplete; use TCP management and inspect the implementation-status notes |
+| Database unavailable or file locked | Check H2 file ownership, installed configuration, permissions, and whether another JVM owns the same embedded database |
+| ECs disappear on watchdog restart | Inspect macOS LaunchAgent process-group behavior and `AbandonProcessGroup`; see recovery notes |
+| New JAR copied but behavior unchanged | Restart affected services/JVMs and reopen the desktop; copying an artifact does not replace loaded classes |
+| Request rejected under load | Inspect admission, connection, frame, and retained-byte limits; reduce demand or tune from measurements |
+
+For local port inspection on macOS/Linux, use `lsof -nP -iTCP:15000 -sTCP:LISTEN` if available. Use JDK `jcmd -l` to list visible JVMs. Inspect the owning process before stopping anything.
+
+## 15. Tests and source map
+
+Run unit tests and build artifacts:
+
+```sh
+./gradlew test shadowJar desktopJar
+```
+
+Run isolated runtime integration tests separately:
+
+```sh
+./gradlew integrationTest
+```
+
+`test` excludes tests tagged `integration`; `integrationTest` includes that tag and depends on the engine JAR and test classes. Tests include message contracts, management commands, platform control/health handling, database operations, admission/registry bounds, TCP backpressure, process identity, and the platform/watchdog/EC integration pipeline. Desktop visual behavior requires separate manual verification; a successful build is not evidence that incomplete GUI server routes work.
+
+HTML reports are generated beneath `build/reports/tests/test/` and `build/reports/tests/integrationTest/`.
+
+```text
+src/main/java/org/prats/
+├── Main.java                    # Installer JAR entry point
+├── installer/                   # Installer shell and validation
+├── container/initializers/      # PLATFORM / EC / WATCHDOG composition roots
+├── container/launchers/         # Config-to-JVM launch translation
+├── jvmLauncher/                 # ProcessBuilder-based child JVM launch
+├── services/                    # Runtime services and control connections
+├── processors/                  # Application, command, response, TCP processing
+├── forwarders/                  # Routing from message operations to services
+├── handlers/                    # Command, database, authentication, control logic
+├── registries/                  # Service, correlation, retry, heartbeat, session state
+├── database/                    # H2, HikariCP, schema and SQL helpers
+├── definitions/                 # Interfaces, enums, envelopes, payload records
+├── parsers/                     # Message/command/config parsing
+├── threading/                   # Executors and admission control
+├── security/                    # Hashing and encryption helpers
+├── loggers/                     # Runtime logging helpers
+└── utilities/                   # Paths, health analysis, process identity
+src/desktop/java/org/prats/desktop/  # Swing app, connection manager, login flow
+src/main/resources/                 # Configuration templates and installer text
+src/test/java/                      # Unit and integration tests
+ops/                                # Operational preparation utilities
+```
+
+For a concrete reading path, start with `CommandLineInterface`, `ContainerLauncher`, and `JVMLauncher`; then read `PlatformInitializer` or `ExecutionContainerInitializer`; follow `TCPApplicationProcessor` → `MessageService` → `RequestProcessor` → `MessageProcessor` → the selected forwarder/handler → `ResponseProcessor`.
+
+## 16. Documentation and diagram index
+
+| Resource | Coverage |
+| --- | --- |
+| [Distributed architecture image](docs/images/01-high-level-architecture.png) | Multi-machine control and peer relationships |
+| [JVM internals image](docs/images/02-execution-container-jvm-internals.png) | Logical execution-container internals |
+| [Core services image](docs/images/03-execution-container-core-services.png) | Service responsibilities and management relationships |
+| [Local deployment image](docs/images/04-local-deployment.svg) | Default JVMs and ports |
+| [Message pipeline image](docs/images/05-message-pipeline.svg) | Concrete request/response class flow |
+| [EC lifecycle image](docs/images/06-ec-lifecycle.svg) | Operator command, WATCHDOG action, and direct EC heartbeat |
+| [Platform commands](docs/platform-commands.md) | Management syntax, scope, and heartbeat report semantics |
+| [Message contracts](docs/message-contracts.md) | Payload records and envelope errors |
+| [Desktop and operations](docs/desktop-and-operations.md) | Additional capacity, packaging, and recovery notes |
+
+The original PNGs provide design context; the additional SVGs document the current local runtime and message/control paths. Where companion desktop documentation refers to GUIService, DiagnosticsService, or monitoring screens, treat those as broader design descriptions rather than features confirmed in this checkout.
